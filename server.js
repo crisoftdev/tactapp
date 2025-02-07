@@ -128,7 +128,21 @@ function authenticateToken(req, res, next) {
     });
 }
 
-// Endpoint para obtener los presupuestos
+app.get('/api/requerimientoshoy', authenticateToken, (req, res) => {
+    const query = `SELECT sum(requerimientos.SubTotal) AS suma, COUNT(*) AS cantidad
+FROM requerimientos
+WHERE date(requerimientos.FechaCreacion)= CURDATE() AND requerimientos.Estado=0 
+
+    `;
+
+    pool.query(query, (err, results) => {
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor' });
+        }
+        res.status(200).json(results[0]);
+    });
+});
 app.get('/api/presupuestoshoy', authenticateToken, (req, res) => {
     const query = `
         SELECT * from resumen_presupuestos
@@ -143,7 +157,6 @@ app.get('/api/presupuestoshoy', authenticateToken, (req, res) => {
         res.status(200).json(results[0]);
     });
 });
-// Endpoint para obtener los pedidos
 app.get('/api/pedidoshoy', authenticateToken, (req, res) => {
     const query = `SELECT * FROM resumen_pedidos
                     WHERE DATE(resumen_pedidos.creado_en) = CURDATE() 
@@ -224,6 +237,36 @@ ORDER BY pedidos.Total DESC;
         res.status(200).json(results);
     });
 });
+app.get('/api/requerimientosDetallehoy', authenticateToken, (req, res) => {
+    const query = `
+        SELECT 
+    fiscal.RazonSocial, 
+    requerimientos.Total,
+    requerimientos.SubTotal, 
+    requerimientos.SubTotal2, 
+    requerimientos.NroMoneda, 
+    requerimientos.fechacreacion, 
+    requerimientos.numero, 
+    requerimientos.id,
+    requerimientos.estado,
+    (SELECT SUM(SubTotal2) 
+     FROM requerimientos 
+     WHERE DATE(requerimientos.FechaCreacion) = CURDATE()) AS total_subtotal2,
+    (SELECT COUNT(*) 
+     FROM requerimientos 
+     WHERE DATE(requerimientos.FechaCreacion) = CURDATE()) AS cantidad_requerimientos
+FROM requerimientos 
+JOIN fiscal ON fiscal.RecID = requerimientos.IDFiscal
+WHERE DATE(requerimientos.FechaCreacion) = CURDATE()    `;
+
+    pool.query(query, (err, results) => {
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor' });
+        }
+        res.status(200).json(results);
+    });
+});
 
 app.get('/api/pedidosDetalleItems/:id', authenticateToken, (req, res) => {
     const { id } = req.params;
@@ -239,6 +282,25 @@ JOIN pedidositems ON pedidositems.idpedido=pedidos.RecID
 JOIN fiscal ON fiscal.RecID=pedidos.IDFiscal
 JOIN talonarios ON talonarios.RecID = pedidos.IDTalonario
 WHERE pedidos.id = ?;
+    `;
+
+    pool.query(query, [id], (err, results) => {
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor' });
+        }
+        res.status(200).json(results);
+    });
+});
+app.get('/api/requerimientosDetalleItems/:id', authenticateToken, (req, res) => {
+    const { id } = req.params;
+    const query = `
+SELECT fiscal.RazonSocial, requerimientos.ID AS Numero, requerimientos.SubTotal, requerimientos.SubTotal2, requerimientos.Impuesto, requerimientos.Total,
+requerimientos.FechaCreacion, requerimientositems.Codigo, requerimientositems.Descripcion, requerimientositems.cantidad, requerimientositems.ImporteUnitario1, requerimientositems.ImportePrecio1, requerimientositems.Estado AS estadoitem, requerimientos.Descuento
+FROM requerimientos
+JOIN requerimientositems ON requerimientositems.IDRequerimiento=requerimientos.RecID
+JOIN fiscal ON fiscal.RecID=requerimientos.IDFiscal
+WHERE requerimientos.id= ?;
     `;
 
     pool.query(query, [id], (err, results) => {
@@ -323,12 +385,20 @@ LIMIT 1;`;
 app.get('/api/facturasDetallehoy', authenticateToken, (req, res) => {
     const query = `
         SELECT 
-    COUNT(*) AS cantidad,  -- Cantidad de facturas
-    SUM(CASE  
-        WHEN facturas.tipo = 0 THEN facturas.Subtotal
-        WHEN facturas.tipo = 1 THEN -(facturas.Subtotal)
-        ELSE 0 
-    END) AS suma_total,    -- Suma total considerando el campo fact
+    (SELECT COUNT(*) 
+     FROM facturas 
+     WHERE DATE(facturas.FechaCreacion) = CURDATE() 
+       AND facturas.Estado IN (0, 1, 5)) AS cantidad, 
+    (SELECT SUM(
+        CASE  
+            WHEN f.tipo = 0 THEN f.Subtotal
+            WHEN f.tipo = 1 THEN -f.Subtotal
+            ELSE 0 
+        END)
+     FROM facturas f
+     WHERE DATE(f.FechaCreacion) = CURDATE() 
+       AND f.Estado IN (0, 1, 5)) AS suma_total, -- Subconsulta para sumar los subtotales
+        
     fiscal.RazonSocial, 
     usuarios.Usuario, 
     CAST(TIME(facturas.fechacreacion) AS CHAR) AS Hora, 
@@ -337,7 +407,7 @@ app.get('/api/facturasDetallehoy', authenticateToken, (req, res) => {
     CONCAT(CAST(LPAD(talonarios.NroSucursal,4,0) AS CHAR), '-', CAST(LPAD(facturas.Numero,8,0) AS CHAR)) AS Numero,
     CASE  
         WHEN facturas.tipo = 0 THEN facturas.Total
-        WHEN facturas.tipo = 1 THEN -(facturas.Total)
+        WHEN facturas.tipo = 1 THEN -facturas.Total
         ELSE 0 
     END AS fact
 FROM facturas
@@ -345,7 +415,7 @@ JOIN fiscal ON fiscal.RecID = facturas.IDFiscal
 JOIN usuarios ON usuarios.recid = facturas.IDUsuario
 JOIN talonarios ON talonarios.RecID = facturas.IDTalonario
 WHERE DATE(facturas.FechaCreacion) = CURDATE() 
-  AND (facturas.Estado = 0 OR facturas.Estado = 1 OR facturas.Estado = 5)
+  AND facturas.Estado IN (0, 1, 5)
 GROUP BY 
     fiscal.RazonSocial, 
     usuarios.Usuario, 
@@ -531,7 +601,52 @@ WHERE presupuestos.ID= ?;
         res.status(200).json(results);
     });
 });
+app.get('/api/busquedaRequerimientos', authenticateToken, (req, res) => {
+    const { empresa, fechaDesde, fechaHasta } = req.query;
+    // Construye la consulta SQL dinámicamente
+    let conditions = [];
+    let values = [];
 
+    if (empresa) {
+        conditions.push("fiscal.RazonSocial LIKE ?");
+        values.push(`%${empresa}%`);
+    }
+    if (fechaDesde) {
+        conditions.push("DATE(requerimientos.FechaCreacion) >= ?");
+        values.push(fechaDesde);
+    }
+    if (fechaHasta) {
+        conditions.push("DATE(requerimientos.FechaCreacion) <= ?");
+        values.push(fechaHasta);
+    }
+
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const query =
+        `SELECT 
+            fiscal.RazonSocial, 
+            requerimientos.Total,
+            requerimientos.SubTotal, 
+            requerimientos.SubTotal2, 
+            requerimientos.NroMoneda, 
+            requerimientos.fechacreacion, 
+            requerimientos.numero, 
+            requerimientos.id,
+            requerimientos.estado
+FROM requerimientos 
+JOIN fiscal ON fiscal.RecID=requerimientos.IDFiscal
+        ${whereClause}
+        ORDER BY requerimientos.FechaCreacion DESC;`
+        ;
+
+    pool.query(query, values, (err, results) => {
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor' });
+        }
+        res.status(200).json(results);
+    });
+});
 app.get('/api/busquedaPedidos', authenticateToken, (req, res) => {
     const { empresa, fechaDesde, fechaHasta } = req.query;
     // Construye la consulta SQL dinámicamente
@@ -569,7 +684,7 @@ app.get('/api/busquedaPedidos', authenticateToken, (req, res) => {
         JOIN fiscal ON fiscal.RecID = pedidos.IDFiscal
         JOIN usuarios ON usuarios.recid = pedidos.IDUsuarioCreacion
         ${whereClause}
-        ORDER BY fiscal.RazonSocial, pedidos.FechaCreacion DESC;`
+        ORDER BY pedidos.FechaCreacion DESC;`
         ;
 
     pool.query(query, values, (err, results) => {
@@ -733,7 +848,8 @@ app.get("/api/buscarEmpresas", authenticateToken, async (req, res) => {
 
     const query = `SELECT empresas.recid, empresas.empresa, fiscal.NroImpuesto1 as cuit
 FROM empresas 
-JOIN fiscal ON fiscal.IDRef=empresas.IDEmpresa WHERE empresa LIKE ?`;
+JOIN fiscal ON fiscal.IDRef=empresas.IDEmpresa AND fiscal.Defecto=1
+ WHERE empresa LIKE ?`;
 
     // Agregar los porcentajes al valor de búsqueda
     const searchPattern = `%${search}%`;
@@ -889,7 +1005,7 @@ app.get("/api/buscarCodigo", authenticateToken, async (req, res) => {
     }
 
     const query = `
-      SELECT Codigo from productos WHERE codigo LIKE ? AND productos.estado=0 AND productos.Inhabilitado=0
+      SELECT Codigo, Descripcion, CodigoFabricante from productos WHERE codigo LIKE ? AND productos.estado=0 AND productos.Inhabilitado=0
       LIMIT 10
     `;
 
@@ -902,6 +1018,7 @@ app.get("/api/buscarCodigo", authenticateToken, async (req, res) => {
             console.error("Error al ejecutar la consulta:", err);
             return res.status(500).json({ message: "Error interno del servidor" });
         }
+        console.log(results)
         res.status(200).json(results);
     });
 });
@@ -925,7 +1042,7 @@ app.get("/api/buscarCodigoDetalle", authenticateToken, async (req, res) => {
         b.NroMonedaPrecio, 
         c.Stock AS Stock_Gral, 
         d.total_pedido, 
-        IFNULL((c.Stock - d.total_pedido),0) AS Stock
+        IFNULL((c.Stock - d.total_pedido),0) AS Stock, a.CodigoFabricante
       FROM 
         (SELECT 
           productos.Codigo, 
@@ -1255,7 +1372,7 @@ setInterval(() => {
 
 
 // Configuración del servidor
-const PORT = process.env.PORT || 5000;
+const PORT =  7000;
 app.listen(PORT, () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
 
 
