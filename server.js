@@ -342,29 +342,57 @@ WHERE DATE(requerimientos.FechaCreacion) = CURDATE()    `;
 });
 app.get('/api/requerimientosDetallemes', authenticateToken, (req, res) => {
     const mes = parseInt(req.query.mes);
-    const query = `
-         SELECT 
-    fiscal.RazonSocial, 
-    requerimientos.Total,
-    requerimientos.SubTotal, 
-    requerimientos.SubTotal2, 
-    requerimientos.NroMoneda, 
-    requerimientos.fechacreacion, 
-    requerimientos.numero, 
-    requerimientos.id,
-    requerimientos.estado,
-    (SELECT SUM(SubTotal2) 
-     FROM requerimientos 
-     WHERE MONTH(requerimientos.FechaCreacion) = ?
+    const tipo = parseInt(req.query.tipo);
+    let query;
+    if (tipo === 0) {
+         query = `
+        SELECT 
+   fiscal.RazonSocial, 
+   requerimientos.Total,
+   requerimientos.SubTotal, 
+   requerimientos.SubTotal2, 
+   requerimientos.NroMoneda, 
+   requerimientos.fechacreacion, 
+   requerimientos.numero, 
+   requerimientos.id,
+   requerimientos.estado,
+   (SELECT SUM(SubTotal2) 
+    FROM requerimientos 
+    WHERE MONTH(requerimientos.FechaCreacion) = ?
 AND DATE(requerimientos.fechacreacion) = YEAR(CURDATE())) AS total_subtotal2,
-    (SELECT COUNT(*) 
-     FROM requerimientos 
-     WHERE MONTH(requerimientos.FechaCreacion) = ?
+   (SELECT COUNT(*) 
+    FROM requerimientos 
+    WHERE MONTH(requerimientos.FechaCreacion) = ?
 AND DATE(requerimientos.fechacreacion) = YEAR(CURDATE())) AS cantidad_requerimientos
 FROM requerimientos 
 JOIN fiscal ON fiscal.RecID = requerimientos.IDFiscal
 WHERE MONTH(requerimientos.FechaCreacion) = ?
 AND DATE(requerimientos.fechacreacion) = YEAR(CURDATE())`;
+    } else if (tipo === 1) {
+         query = `
+        SELECT 
+        fiscal.RazonSocial, 
+        requerimientos.Total,
+        requerimientos.SubTotal, 
+        requerimientos.SubTotal2, 
+        requerimientos.NroMoneda, 
+        requerimientos.fechacreacion, 
+        requerimientos.numero, 
+        requerimientos.id,
+        requerimientos.estado,
+        (SELECT SUM(SubTotal2) 
+        FROM requerimientos 
+        WHERE MONTH(requerimientos.FechaCreacion) = ? AND fiscal.RazonSocial='AUTOMAC.MICROMECANICA S.A.I.C.'
+        AND DATE(requerimientos.fechacreacion) = YEAR(CURDATE())) AS total_subtotal2,
+        (SELECT COUNT(*) 
+        FROM requerimientos 
+        WHERE MONTH(requerimientos.FechaCreacion) = ? AND fiscal.RazonSocial='AUTOMAC.MICROMECANICA S.A.I.C.'
+        AND DATE(requerimientos.fechacreacion) = YEAR(CURDATE())) AS cantidad_requerimientos
+        FROM requerimientos 
+        JOIN fiscal ON fiscal.RecID = requerimientos.IDFiscal
+        WHERE MONTH(requerimientos.FechaCreacion) = ? AND fiscal.RazonSocial='AUTOMAC.MICROMECANICA S.A.I.C.'
+        AND DATE(requerimientos.fechacreacion) = YEAR(CURDATE())`;
+    }
 
     pool.query(query, [mes, mes, mes], (err, results) => {
         if (err) {
@@ -1181,7 +1209,7 @@ JOIN fiscal ON fiscal.RecID=fa.IDFiscal
     if (fechaHasta) allValues.push(fechaHasta);
 
     pool.query(query, allValues, (err, results) => {
-        
+
         if (err) {
             console.error('Error al ejecutar la consulta:', err);
             return res.status(500).json({ message: 'Error interno del servidor', error: err.sqlMessage });
@@ -1492,7 +1520,7 @@ app.get("/api/buscarCodigoDetalle", authenticateToken, async (req, res) => {
     if (!search) {
         return res.status(400).json({ error: "El parámetro 'search' es requerido." });
     }
-    
+
     const query = `
     SELECT 
         a.Codigo, 
@@ -2079,25 +2107,65 @@ app.get('/api/facturasmes', authenticateToken, (req, res) => {
     `;
 
     const requerimientosQuery = `
-        SELECT 
-            SUM(requerimientos.SubTotal2) AS subtotal,
-            (
-                SELECT valor 
-                FROM objetivomensual 
-                WHERE modulo = ? AND idusuario = ?  AND mes = ?
-    LIMIT 1
-            ) AS objetivo
-        FROM requerimientos 
-        JOIN fiscal ON fiscal.recid = requerimientos.IDFiscal
-        WHERE fiscal.RazonSocial = 'AUTOMAC.MICROMECANICA S.A.I.C.'
-          AND MONTH(requerimientos.FechaCreacion) = ?
-          AND YEAR(requerimientos.FechaCreacion) = YEAR(CURDATE())
+         SELECT 
+    SUM(subtotal_ajustado) AS subtotal, 
+    (
+        SELECT valor 
+        FROM objetivomensual 
+        WHERE modulo = ? AND idusuario = ? AND mes = ?
+        LIMIT 1
+    ) AS objetivo
+FROM (
+    SELECT DISTINCT 
+        CASE 
+            WHEN requerimientos.nromoneda = 1 THEN requerimientos.SubTotal2
+            WHEN requerimientos.nromoneda = 2 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda2
+            WHEN requerimientos.nromoneda = 3 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda3
+            ELSE 0  
+        END AS subtotal_ajustado
+    FROM requerimientos 
+    JOIN requerimientositems ON requerimientositems.IDRequerimiento = requerimientos.recid
+    JOIN fiscal ON fiscal.recid = requerimientos.IDFiscal
+    JOIN monedacotizaciones ON monedacotizaciones.RecID = requerimientositems.IDCotizacionMoneda
+    WHERE
+       MONTH(requerimientos.FechaCreacion) = ?
+      AND YEAR(requerimientos.FechaCreacion) = YEAR(CURDATE())
+) AS subquery;
     `;
+
+    const requerimientosMicroQuery = `
+    SELECT 
+    SUM(subtotal_ajustado) AS subtotal, 
+    (
+        SELECT valor 
+        FROM objetivomensual 
+        WHERE modulo = ? AND idusuario = ? AND mes = ?
+        LIMIT 1
+    ) AS objetivo
+FROM (
+    SELECT DISTINCT 
+        CASE 
+            WHEN requerimientos.nromoneda = 1 THEN requerimientos.SubTotal2
+            WHEN requerimientos.nromoneda = 2 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda2
+            WHEN requerimientos.nromoneda = 3 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda3
+            ELSE 0  
+        END AS subtotal_ajustado
+    FROM requerimientos 
+    JOIN requerimientositems ON requerimientositems.IDRequerimiento = requerimientos.recid
+    JOIN fiscal ON fiscal.recid = requerimientos.IDFiscal
+    JOIN monedacotizaciones ON monedacotizaciones.RecID = requerimientositems.IDCotizacionMoneda
+    WHERE fiscal.RazonSocial = 'AUTOMAC.MICROMECANICA S.A.I.C.'
+      AND MONTH(requerimientos.FechaCreacion) = ?
+      AND YEAR(requerimientos.FechaCreacion) = YEAR(CURDATE())
+) AS subquery;
+`;
 
     const facturasParams = [mes, mes, idusuario, modulo1, mes];
     const pedidosParams = [idusuario, modulo2, mes, mes];
     const presupuestosParams = [mes];
     const requerimientosParams = [modulo4, idusuario, mes, mes];
+    const requerimientosMicroParams = [modulo4, idusuario, mes, mes];
+
 
     const facturasPromise = new Promise((resolve, reject) => {
         pool.query(facturasQuery, facturasParams, (err, results) => {
@@ -2126,14 +2194,22 @@ app.get('/api/facturasmes', authenticateToken, (req, res) => {
             resolve(results[0]);
         });
     });
+    const requerimientosMicroPromise = new Promise((resolve, reject) => {
+        pool.query(requerimientosMicroQuery, requerimientosMicroParams, (err, results) => {
+            if (err) return reject(err);
+            resolve(results[0]);
+        });
+    });
 
-    Promise.all([facturasPromise, pedidosPromise, presupuestosPromise, requerimientosPromise])
-        .then(([facturas, pedidos, presupuestos, requerimientos]) => {
+    Promise.all([facturasPromise, pedidosPromise, presupuestosPromise, requerimientosPromise, requerimientosMicroPromise])
+        .then(([facturas, pedidos, presupuestos, requerimientos, requerimientosMicro]) => {
+
             res.status(200).json({
                 facturas,
                 pedidos,
                 presupuestos,
-                requerimientos
+                requerimientos,
+                requerimientosMicro
             });
         })
         .catch(err => {
@@ -2141,9 +2217,11 @@ app.get('/api/facturasmes', authenticateToken, (req, res) => {
             res.status(500).json({ message: 'Error interno del servidor' });
         });
 });
+
+
 app.get('/api/home', authenticateToken, (req, res) => {
     const idusuario = req.user.userId;
-   
+
 
     const queries = {
         facturas: `
@@ -2258,18 +2336,18 @@ app.get('/api/home', authenticateToken, (req, res) => {
             });
         }),
     ])
-    .then(([facturas, pedidos, presupuestos, requerimientos]) => {
-        res.json({
-            facturas,
-            pedidos,
-            presupuestos,
-            requerimientos
+        .then(([facturas, pedidos, presupuestos, requerimientos]) => {
+            res.json({
+                facturas,
+                pedidos,
+                presupuestos,
+                requerimientos
+            });
+        })
+        .catch(err => {
+            console.error('Error al ejecutar las consultas:', err);
+            res.status(500).json({ message: 'Error interno del servidor' });
         });
-    })
-    .catch(err => {
-        console.error('Error al ejecutar las consultas:', err);
-        res.status(500).json({ message: 'Error interno del servidor' });
-    });
 });
 
 
