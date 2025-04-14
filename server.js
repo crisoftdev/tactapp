@@ -53,7 +53,6 @@ const User = {
         });
     }
 };
-
 // Ruta de registro de usuario
 app.post('/api/auth/register', async (req, res) => {
     const { correo, contrasenia } = req.body;
@@ -75,7 +74,6 @@ app.post('/api/auth/register', async (req, res) => {
         res.status(500).json({ message: 'Error en el registro del usuario', error: error.message });
     }
 });
-
 // Ruta de inicio de sesión (login)
 app.post('/api/auth/login', async (req, res) => {
     const { correo, contrasenia } = req.body;
@@ -98,7 +96,6 @@ app.post('/api/auth/login', async (req, res) => {
         res.status(500).json({ message: 'Error en el inicio de sesión' });
     }
 });
-
 // Ruta para obtener los pedidos (ejemplo, puedes personalizarlo)
 app.get('/api/orders', (req, res) => {
     pool.query('SELECT * FROM orders', (err, results) => {
@@ -109,7 +106,6 @@ app.get('/api/orders', (req, res) => {
         res.status(200).json(results);
     });
 });
-
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -126,9 +122,8 @@ function authenticateToken(req, res, next) {
         next();
     });
 }
-
 app.get('/api/requerimientoshoy', authenticateToken, (req, res) => {
-    const query = `SELECT sum(requerimientos.SubTotal) AS suma, COUNT(*) AS cantidad
+    const query = `SELECT sum(requerimientos.SubTotal2) AS suma, COUNT(*) AS cantidad
 FROM requerimientos
 WHERE date(requerimientos.FechaCreacion)= CURDATE() AND requerimientos.Estado=0 
 
@@ -188,6 +183,74 @@ app.get('/api/pedidosDetallehoy', authenticateToken, (req, res) => {
         CONCAT(cast(LPAD(talonarios.NroSucursal,4,0) AS CHAR),'-',cast(LPAD(pedidos.Numero,8,0) AS CHAR)) AS Numero,
  ROUND(
         CASE 
+            WHEN pedidos.NroMoneda = 1 THEN pedidos.subtotal
+            WHEN pedidos.NroMoneda = 2 THEN pedidos.subtotal * (
+                SELECT cotmoneda2 
+                FROM monedacotizaciones 
+                ORDER BY fechahora DESC 
+                LIMIT 1
+            )
+            WHEN pedidos.NroMoneda = 3 THEN pedidos.subtotal * (
+                SELECT cotmoneda3 
+                FROM monedacotizaciones 
+                ORDER BY fechahora DESC 
+                LIMIT 1
+            )
+            ELSE 0 -- En caso de que NroMoneda no coincida con 1, 2 o 3
+        END, 
+    2) AS Total_Ped,
+        (SELECT 
+        ROUND(
+            SUM(
+                CASE 
+                    WHEN p.NroMoneda = 1 THEN p.subtotal
+                    WHEN p.NroMoneda = 2 THEN p.subtotal * (
+                        SELECT cotmoneda2 
+                        FROM monedacotizaciones 
+                        ORDER BY fechahora DESC 
+                        LIMIT 1
+                    )
+                    WHEN p.NroMoneda = 3 THEN p.subtotal * (
+                        SELECT cotmoneda3 
+                        FROM monedacotizaciones 
+                        ORDER BY fechahora DESC 
+                        LIMIT 1
+                    )
+                    ELSE 0
+                END
+            ), 2
+        )
+     FROM pedidos p
+     WHERE DATE(p.FechaCreacion) = CURDATE()
+    ) AS suma
+    
+    
+FROM pedidos
+JOIN fiscal ON fiscal.RecID=pedidos.IDFiscal
+JOIN usuarios ON usuarios.recid = pedidos.IDUsuarioCreacion
+JOIN talonarios ON talonarios.RecID = pedidos.IDTalonario
+WHERE date(pedidos.FechaCreacion) = CURDATE() AND pedidos.Estado<>2
+ORDER BY pedidos.Total DESC;
+
+    `;
+
+    pool.query(query, (err, results) => {
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor' });
+        }
+        res.status(200).json(results);
+    });
+});
+app.get('/api/pedidosDetalleMes', authenticateToken, (req, res) => {
+    const mes = parseInt(req.query.mes);
+    console.log("messs", mes)
+    const query = `
+         SELECT fiscal.RazonSocial, pedidos.Total, usuarios.Usuario, pedidos.NroMoneda,  pedidos.estado, pedidos.escenario,
+        CAST(TIME(pedidos.fechacreacion) AS CHAR) AS Hora, pedidos.numero,pedidos.id,
+        CONCAT(cast(LPAD(talonarios.NroSucursal,4,0) AS CHAR),'-',cast(LPAD(pedidos.Numero,8,0) AS CHAR)) AS Numero,
+ ROUND(
+        CASE 
             WHEN pedidos.NroMoneda = 1 THEN pedidos.Total
             WHEN pedidos.NroMoneda = 2 THEN pedidos.Total * (
                 SELECT cotmoneda2 
@@ -226,7 +289,7 @@ app.get('/api/pedidosDetallehoy', authenticateToken, (req, res) => {
             ), 2
         )
      FROM pedidos p
-     WHERE DATE(p.FechaCreacion) = CURDATE()
+     WHERE MONTH(p.FechaCreacion) = ? AND YEAR(p.fechacreacion) = YEAR(CURDATE())
     ) AS suma
     
     
@@ -234,12 +297,12 @@ FROM pedidos
 JOIN fiscal ON fiscal.RecID=pedidos.IDFiscal
 JOIN usuarios ON usuarios.recid = pedidos.IDUsuarioCreacion
 JOIN talonarios ON talonarios.RecID = pedidos.IDTalonario
-WHERE date(pedidos.FechaCreacion) = CURDATE() AND pedidos.Estado<>2
+WHERE MONTH(pedidos.FechaCreacion) = ? AND YEAR(pedidos.fechacreacion) = YEAR(CURDATE()) AND pedidos.Estado<>2
 ORDER BY pedidos.Total DESC;
 
     `;
 
-    pool.query(query, (err, results) => {
+    pool.query(query, [mes, mes], (err, results) => {
         if (err) {
             console.error('Error al ejecutar la consulta:', err);
             return res.status(500).json({ message: 'Error interno del servidor' });
@@ -277,7 +340,40 @@ WHERE DATE(requerimientos.FechaCreacion) = CURDATE()    `;
         res.status(200).json(results);
     });
 });
+app.get('/api/requerimientosDetallemes', authenticateToken, (req, res) => {
+    const mes = parseInt(req.query.mes);
+    const query = `
+         SELECT 
+    fiscal.RazonSocial, 
+    requerimientos.Total,
+    requerimientos.SubTotal, 
+    requerimientos.SubTotal2, 
+    requerimientos.NroMoneda, 
+    requerimientos.fechacreacion, 
+    requerimientos.numero, 
+    requerimientos.id,
+    requerimientos.estado,
+    (SELECT SUM(SubTotal2) 
+     FROM requerimientos 
+     WHERE MONTH(requerimientos.FechaCreacion) = ?
+AND DATE(requerimientos.fechacreacion) = YEAR(CURDATE())) AS total_subtotal2,
+    (SELECT COUNT(*) 
+     FROM requerimientos 
+     WHERE MONTH(requerimientos.FechaCreacion) = ?
+AND DATE(requerimientos.fechacreacion) = YEAR(CURDATE())) AS cantidad_requerimientos
+FROM requerimientos 
+JOIN fiscal ON fiscal.RecID = requerimientos.IDFiscal
+WHERE MONTH(requerimientos.FechaCreacion) = ?
+AND DATE(requerimientos.fechacreacion) = YEAR(CURDATE())`;
 
+    pool.query(query, [mes, mes, mes], (err, results) => {
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor' });
+        }
+        res.status(200).json(results);
+    });
+});
 app.get('/api/pedidosDetalleItems/:id', authenticateToken, (req, res) => {
     const { id } = req.params;
     const query = `
@@ -321,7 +417,6 @@ WHERE requerimientos.id= ?;
         res.status(200).json(results);
     });
 });
-
 app.get('/api/facturashoy', authenticateToken, (req, res) => {
     const idusuario = req.user.userId;
 
@@ -409,8 +504,6 @@ app.get('/api/facturashoy', authenticateToken, (req, res) => {
         res.status(200).json(results[0]);
     });
 });
-
-
 app.get('/api/facturasDetallehoy', authenticateToken, (req, res) => {
     const query = `
         SELECT 
@@ -465,7 +558,50 @@ ORDER BY facturas.Total DESC;
         res.status(200).json(results);
     });
 });
+app.get('/api/facturasdetallemes', authenticateToken, (req, res) => {
+    const mes = parseInt(req.query.mes);
+    console.log(mes)
+    const query = `
+       SELECT         
+    fiscal.RazonSocial, 
+    usuarios.Usuario, 
+    CAST(TIME(facturas.fechacreacion) AS CHAR) AS Hora, 
+    facturas.nromoneda, 
+    facturas.id, 
+    CONCAT(CAST(LPAD(talonarios.NroSucursal,4,0) AS CHAR), '-', CAST(LPAD(facturas.Numero,8,0) AS CHAR)) AS Numero,
+    CASE  
+        WHEN facturas.tipo = 0 THEN facturas.Total
+        WHEN facturas.tipo = 1 THEN -facturas.Total
+        ELSE 0 
+    END AS fact
+FROM facturas
+JOIN fiscal ON fiscal.RecID = facturas.IDFiscal
+JOIN usuarios ON usuarios.recid = facturas.IDUsuario
+JOIN talonarios ON talonarios.RecID = facturas.IDTalonario
+WHERE MONTH(facturas.FechaCreacion) = ? AND DATE(facturas.FechaCreacion) = YEAR(CURDATE())
+  AND facturas.Estado IN (0, 1, 5)
+GROUP BY 
+    fiscal.RazonSocial, 
+    usuarios.Usuario, 
+    Hora, 
+    facturas.nromoneda, 
+    facturas.id, 
+    Numero, 
+    fact
+ORDER BY facturas.Total DESC;
 
+    `;
+
+    pool.query(query, [mes], (err, results) => {
+        console.log(results)
+
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor' });
+        }
+        res.status(200).json(results);
+    });
+});
 app.get('/api/facturasDetalleItems/:id', authenticateToken, (req, res) => {
     const { id } = req.params; // Extrae el ID de los parámetros de la URL
     const query = `
@@ -489,8 +625,127 @@ app.get('/api/facturasDetalleItems/:id', authenticateToken, (req, res) => {
         res.status(200).json(results);
     });
 });
-
 app.get('/api/presupuestosDetallehoy', authenticateToken, (req, res) => {
+    const query = `
+        SELECT 
+    empresas.Empresa, 
+    presupuestos.Total, 
+    CAST(TIME(presupuestos.fechacreacion) AS CHAR) AS Hora, 
+    presupuestos.estado, presupuestos.id,
+    ROUND(
+        CASE 
+            WHEN presupuestos.NroMoneda = 1 THEN presupuestos.subtotal
+            WHEN presupuestos.NroMoneda = 2 THEN presupuestos.subtotal * (
+                SELECT cotmoneda2 
+                FROM monedacotizaciones 
+                ORDER BY fechahora DESC 
+                LIMIT 1
+            )
+            WHEN presupuestos.NroMoneda = 3 THEN presupuestos.subtotal * (
+                SELECT cotmoneda3 
+                FROM monedacotizaciones 
+                ORDER BY fechahora DESC 
+                LIMIT 1
+            )
+            ELSE 0 -- En caso de que NroMoneda no coincida con 1, 2 o 3
+        END, 
+    2) AS Total_Cot,
+    usuarios.Usuario, 
+    presupuestos.NroMoneda,
+    -- Suma total de todos los presupuestos del día
+    (SELECT 
+        ROUND(
+            SUM(
+                CASE 
+                    WHEN p.NroMoneda = 1 THEN p.subtotal
+                    WHEN p.NroMoneda = 2 THEN p.subtotal * (
+                        SELECT cotmoneda2 
+                        FROM monedacotizaciones 
+                        ORDER BY fechahora DESC 
+                        LIMIT 1
+                    )
+                    WHEN p.NroMoneda = 3 THEN p.subtotal * (
+                        SELECT cotmoneda3 
+                        FROM monedacotizaciones 
+                        ORDER BY fechahora DESC 
+                        LIMIT 1
+                    )
+                    ELSE 0
+                END
+            ), 2
+        )
+     FROM presupuestos p
+     WHERE DATE(p.FechaCreacion) = CURDATE()
+    ) AS suma,
+    -- Suma de totales cuando estado=0
+    (SELECT 
+        ROUND(
+            SUM(
+                CASE 
+                    WHEN p.NroMoneda = 1 THEN p.subtotal
+                    WHEN p.NroMoneda = 2 THEN p.subtotal * (
+                        SELECT cotmoneda2 
+                        FROM monedacotizaciones 
+                        ORDER BY fechahora DESC 
+                        LIMIT 1
+                    )
+                    WHEN p.NroMoneda = 3 THEN p.subtotal * (
+                        SELECT cotmoneda3 
+                        FROM monedacotizaciones 
+                        ORDER BY fechahora DESC 
+                        LIMIT 1
+                    )
+                    ELSE 0
+                END
+            ), 2
+        )
+     FROM presupuestos p
+     WHERE DATE(p.FechaCreacion) = CURDATE() AND p.estado = 0
+    ) AS suma_estado_0,
+    -- Suma de totales cuando estado=1
+    ifnull((SELECT 
+        ROUND(
+            SUM(
+                CASE 
+                    WHEN p.NroMoneda = 1 THEN p.subtotal
+                    WHEN p.NroMoneda = 2 THEN p.subtotal * (
+                        SELECT cotmoneda2 
+                        FROM monedacotizaciones 
+                        ORDER BY fechahora DESC 
+                        LIMIT 1
+                    )
+                    WHEN p.NroMoneda = 3 THEN p.subtotal * (
+                        SELECT cotmoneda3 
+                        FROM monedacotizaciones 
+                        ORDER BY fechahora DESC 
+                        LIMIT 1
+                    )
+                    ELSE 0
+                END
+            ), 2
+        )
+     FROM presupuestos p
+     WHERE DATE(p.FechaCreacion) = CURDATE() AND p.estado = 1
+    ),0) AS suma_estado_1
+FROM presupuestos
+JOIN contactos ON contactos.IDContacto = presupuestos.IDRef
+JOIN empresas ON empresas.idempresa = contactos.IDEmpresa
+JOIN usuarios ON usuarios.recid = presupuestos.IDUsuarioCreacion
+WHERE DATE(presupuestos.FechaCreacion) = CURDATE()
+                        ORDER BY presupuestos.Total DESC;
+
+    `;
+
+    pool.query(query, (err, results) => {
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor' });
+        }
+        res.status(200).json(results);
+    });
+});
+app.get('/api/presupuestosDetallemes', authenticateToken, (req, res) => {
+    const mes = parseInt(req.query.mes);
     const query = `
         SELECT 
     empresas.Empresa, 
@@ -540,7 +795,7 @@ app.get('/api/presupuestosDetallehoy', authenticateToken, (req, res) => {
             ), 2
         )
      FROM presupuestos p
-     WHERE DATE(p.FechaCreacion) = CURDATE()
+         WHERE MONTH(p.FechaCreacion) = ? AND DATE(p.fechacreacion) = YEAR(CURDATE())
     ) AS suma,
     -- Suma de totales cuando estado=0
     (SELECT 
@@ -565,7 +820,7 @@ app.get('/api/presupuestosDetallehoy', authenticateToken, (req, res) => {
             ), 2
         )
      FROM presupuestos p
-     WHERE DATE(p.FechaCreacion) = CURDATE() AND p.estado = 0
+         WHERE MONTH(p.FechaCreacion) = ? AND DATE(p.fechacreacion) = YEAR(CURDATE()) AND p.estado = 0
     ) AS suma_estado_0,
     -- Suma de totales cuando estado=1
     ifnull((SELECT 
@@ -590,18 +845,18 @@ app.get('/api/presupuestosDetallehoy', authenticateToken, (req, res) => {
             ), 2
         )
      FROM presupuestos p
-     WHERE DATE(p.FechaCreacion) = CURDATE() AND p.estado = 1
+          WHERE MONTH(p.FechaCreacion) = ? AND DATE(p.fechacreacion) = YEAR(CURDATE()) AND p.estado = 1
     ),0) AS suma_estado_1
 FROM presupuestos
 JOIN contactos ON contactos.IDContacto = presupuestos.IDRef
 JOIN empresas ON empresas.idempresa = contactos.IDEmpresa
 JOIN usuarios ON usuarios.recid = presupuestos.IDUsuarioCreacion
-WHERE DATE(presupuestos.FechaCreacion) = CURDATE()
+   WHERE MONTH(presupuestos.FechaCreacion) = ? AND DATE(presupuestos.fechacreacion) = YEAR(CURDATE())
                         ORDER BY presupuestos.Total DESC;
 
     `;
 
-    pool.query(query, (err, results) => {
+    pool.query(query, [mes, mes, mes, mes], (err, results) => {
         if (err) {
             console.error('Error al ejecutar la consulta:', err);
             return res.status(500).json({ message: 'Error interno del servidor' });
@@ -609,7 +864,6 @@ WHERE DATE(presupuestos.FechaCreacion) = CURDATE()
         res.status(200).json(results);
     });
 });
-
 app.get('/api/presupuestosDetalleItems/:id', authenticateToken, (req, res) => {
     const { id } = req.params; // Extrae el ID de los parámetros de la URL
     const query = `
@@ -761,7 +1015,7 @@ app.get('/api/busquedaPresupuestos', authenticateToken, (req, res) => {
             fiscal.RazonSocial, 
             presupuestos.Total AS Total2,
             if (presupuestos.NroMoneda=1,presupuestos.total,presupuestos.Total* monedacotizaciones.CotMoneda2) AS Total,
-            if (presupuestos.NroMoneda=1,presupuestos.SubTotal,presupuestos.SubTotal* monedacotizaciones.CotMoneda2) AS SubTotal,
+            if (presupuestos.NroMoneda=1,presupuestos.SubTotal2,presupuestos.SubTotal2* monedacotizaciones.CotMoneda2) AS SubTotal,
             presupuestos.SubTotal as SubTotal2, 
             usuarios.Usuario, 
             presupuestos.NroMoneda, 
@@ -790,7 +1044,6 @@ app.get('/api/busquedaPresupuestos', authenticateToken, (req, res) => {
 app.get('/api/busquedaFacturas', authenticateToken, (req, res) => {
     const { empresa, fechaDesde, fechaHasta } = req.query;
 
-    // Construye la consulta SQL dinámicamente
     const conditions = [];
     const values = [];
 
@@ -807,26 +1060,78 @@ app.get('/api/busquedaFacturas', authenticateToken, (req, res) => {
         values.push(fechaHasta);
     }
 
-    // Agrega condiciones de Estado
-    conditions.push("(facturas.Estado = 0 OR facturas.Estado = 1 OR facturas.Estado = 5)");
+    conditions.push("facturas.Estado IN (0, 1, 5)");
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
     const query = `
-        SELECT fiscal.RazonSocial, usuarios.Usuario, facturas.id,
-CAST(CONCAT(LPAD(talonarios.NroSucursal,5,0),'-', LPAD(facturas.Numero,8,0)) AS CHAR) AS Numero, facturas.FechaCreacion,
-facturas.SubTotal as SubTotal2, facturas.Estado, facturas.NroMoneda, facturas.Total AS Total2,
-if(facturas.NroMoneda=1,facturas.Total, facturas.Total*monedacotizaciones.CotMoneda2) AS Total,
-if(facturas.NroMoneda=1,facturas.SubTotal, facturas.SubTotal*monedacotizaciones.CotMoneda2) AS SubTotal
-FROM facturas
-JOIN fiscal ON fiscal.RecID=facturas.IDFiscal
-JOIN usuarios ON usuarios.RecID=facturas.IDUsuario
-JOIN talonarios ON talonarios.RecID=facturas.IDTalonario
-LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID= facturas.IDCotizacionMoneda
-${whereClause} ORDER BY facturas.total desc;
+    SELECT 
+        A.*, 
+        B.TotalGeneralDelPeriodo
+    FROM (
+        SELECT 
+            fiscal.RazonSocial, 
+            usuarios.Usuario, 
+            facturas.id,
+            CAST(CONCAT(LPAD(talonarios.NroSucursal,5,'0'),'-', LPAD(facturas.Numero,8,'0')) AS CHAR) AS Numero, 
+            facturas.FechaCreacion,
+            facturas.SubTotal AS SubTotal2, 
+            facturas.Estado, 
+            facturas.NroMoneda, 
+            facturas.Total AS Total2,
+            IF(
+                facturas.NroMoneda = 1, 
+                IF(facturas.Tipo = 0, facturas.Total, -facturas.Total), 
+                IF(facturas.Tipo = 0, facturas.Total * monedacotizaciones.CotMoneda2, -(facturas.Total * monedacotizaciones.CotMoneda2))
+            ) AS Total,
+            IF(
+                facturas.NroMoneda = 1, 
+                IF(facturas.Tipo = 0, 
+                    IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), (facturas.SubTotal - facturas.ImporteDescuento)), 
+                    IF(facturas.TipoMultitipo = 2, -(facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), -(facturas.SubTotal - facturas.ImporteDescuento))
+                ), 
+                IF(facturas.Tipo = 0, 
+                    IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2, (facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2), 
+                    IF(facturas.TipoMultitipo = 2, -((facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2), -((facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2))
+                )
+            ) AS SubTotal
+        FROM facturas
+        JOIN fiscal ON fiscal.RecID = facturas.IDFiscal
+        JOIN usuarios ON usuarios.RecID = facturas.IDUsuario
+        JOIN talonarios ON talonarios.RecID = facturas.IDTalonario
+        LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = facturas.IDCotizacionMoneda
+        ${whereClause}
+        ORDER BY facturas.Total DESC
+    ) AS A,
+    (
+        SELECT 
+            SUM(
+                IF(f.NroMoneda = 1, 
+                    IF(f.Tipo = 0, 
+                        IF(f.TipoMultitipo = 2, (f.SubTotal - f.ImporteDescuento - f.Impuesto), (f.SubTotal - f.ImporteDescuento)), 
+                        IF(f.TipoMultitipo = 2, -(f.SubTotal - f.ImporteDescuento - f.Impuesto), -(f.SubTotal - f.ImporteDescuento))
+                    ), 
+                    IF(f.Tipo = 0, 
+                        IF(f.TipoMultitipo = 2, (f.SubTotal - f.ImporteDescuento - f.Impuesto) * m.CotMoneda2, (f.SubTotal - f.ImporteDescuento) * m.CotMoneda2), 
+                        IF(f.TipoMultitipo = 2, -((f.SubTotal - f.ImporteDescuento - f.Impuesto) * m.CotMoneda2), -((f.SubTotal - f.ImporteDescuento) * m.CotMoneda2))
+                    )
+                )
+            ) AS TotalGeneralDelPeriodo
+        FROM facturas f
+        LEFT JOIN monedacotizaciones m ON m.RecID = f.IDCotizacionMoneda
+        WHERE 
+            f.Estado IN (0, 1, 5)
+            ${fechaDesde ? ' AND DATE(f.FechaCreacion) >= ?' : ''}
+            ${fechaHasta ? ' AND DATE(f.FechaCreacion) <= ?' : ''}
+    ) AS B;
     `;
 
-    pool.query(query, values, (err, results) => {
+    // Armamos de nuevo los valores para la subconsulta B también
+    const allValues = [...values];
+    if (fechaDesde) allValues.push(fechaDesde);
+    if (fechaHasta) allValues.push(fechaHasta);
+
+    pool.query(query, allValues, (err, results) => {
         if (err) {
             console.error('Error al ejecutar la consulta:', err);
             return res.status(500).json({ message: 'Error interno del servidor', error: err.sqlMessage });
@@ -834,6 +1139,118 @@ ${whereClause} ORDER BY facturas.total desc;
         res.status(200).json(results);
     });
 });
+app.get('/api/busquedaFacturasChart', authenticateToken, (req, res) => {
+    const { empresa, fechaDesde, fechaHasta } = req.query;
+
+    const conditions = [];
+    const values = [];
+
+    if (empresa) {
+        conditions.push("fiscal.RazonSocial LIKE ?");
+        values.push(`%${empresa}%`);
+    }
+    if (fechaDesde) {
+        conditions.push("DATE(fi.FechaEmision) >= ?");
+        values.push(fechaDesde);
+    }
+    if (fechaHasta) {
+        conditions.push("DATE(fi.FechaEmision) <= ?");
+        values.push(fechaHasta);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const query = `
+    SELECT 
+  fi.Fabricante AS RazonSocial,
+
+  (
+    ((fi.ImportePrecio1) * (1 - (fi.Descuento / 100))) 
+    * (1 - (fa.Descuento / 100))
+  ) AS SubTotal
+FROM facturasitems AS fi
+JOIN facturas AS fa ON fa.RecID = fi.IDFactura
+JOIN fiscal ON fiscal.RecID=fa.IDFiscal
+        ${whereClause}
+       
+    `;
+
+    // Armamos de nuevo los valores para la subconsulta B también
+    const allValues = [...values];
+    if (fechaDesde) allValues.push(fechaDesde);
+    if (fechaHasta) allValues.push(fechaHasta);
+
+    pool.query(query, allValues, (err, results) => {
+        
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor', error: err.sqlMessage });
+        }
+        res.status(200).json(results);
+    });
+});
+
+// app.get('/api/busquedaFacturas', authenticateToken, (req, res) => {
+//     const { empresa, fechaDesde, fechaHasta } = req.query;
+
+//     // Construye la consulta SQL dinámicamente
+//     const conditions = [];
+//     const values = [];
+
+//     if (empresa) {
+//         conditions.push("fiscal.RazonSocial LIKE ?");
+//         values.push(`%${empresa}%`);
+//     }
+//     if (fechaDesde) {
+//         conditions.push("DATE(facturas.FechaCreacion) >= ?");
+//         values.push(fechaDesde);
+//     }
+//     if (fechaHasta) {
+//         conditions.push("DATE(facturas.FechaCreacion) <= ?");
+//         values.push(fechaHasta);
+//     }
+
+//     // Agrega condiciones de Estado
+//     conditions.push("(facturas.Estado = 0 OR facturas.Estado = 1 OR facturas.Estado = 5)");
+
+//     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+//     const query = `
+//         SELECT fiscal.RazonSocial, usuarios.Usuario, facturas.id,
+// CAST(CONCAT(LPAD(talonarios.NroSucursal,5,0),'-', LPAD(facturas.Numero,8,0)) AS CHAR) AS Numero, facturas.FechaCreacion,
+// facturas.SubTotal as SubTotal2, facturas.Estado, facturas.NroMoneda, facturas.Total AS Total2,
+// IF(
+//     facturas.NroMoneda = 1, 
+//     IF(facturas.Tipo = 0, facturas.Total, -facturas.Total), 
+//     IF(facturas.Tipo = 0, facturas.Total * monedacotizaciones.CotMoneda2, -(facturas.Total * monedacotizaciones.CotMoneda2))
+// ) AS Total,
+// IF(
+//     facturas.NroMoneda = 1, 
+//     IF(facturas.Tipo = 0, 
+//         IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), (facturas.SubTotal - facturas.ImporteDescuento)), 
+//         IF(facturas.TipoMultitipo = 2, -(facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), -(facturas.SubTotal - facturas.ImporteDescuento))
+//     ), 
+//     IF(facturas.Tipo = 0, 
+//         IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2, (facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2), 
+//         IF(facturas.TipoMultitipo = 2, -((facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2), -((facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2))
+//     )
+// ) AS SubTotal
+// FROM facturas
+// JOIN fiscal ON fiscal.RecID=facturas.IDFiscal
+// JOIN usuarios ON usuarios.RecID=facturas.IDUsuario
+// JOIN talonarios ON talonarios.RecID=facturas.IDTalonario
+// LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID= facturas.IDCotizacionMoneda
+// ${whereClause} ORDER BY facturas.total desc;
+//     `;
+
+//     pool.query(query, values, (err, results) => {
+//         if (err) {
+//             console.error('Error al ejecutar la consulta:', err);
+//             return res.status(500).json({ message: 'Error interno del servidor', error: err.sqlMessage });
+//         }
+//         res.status(200).json(results);
+//     });
+// });
 app.get('/api/detalleCC/:cuit', authenticateToken, (req, res) => {
     const { cuit } = req.params; // Extrae el ID de los parámetros de la URL
     const query = `
@@ -1069,17 +1486,15 @@ app.get("/api/buscarCodigo", authenticateToken, async (req, res) => {
         res.status(200).json(results);
     });
 });
-
 app.get("/api/buscarCodigoDetalle", authenticateToken, async (req, res) => {
     const { search } = req.query;
 
     if (!search) {
         return res.status(400).json({ error: "El parámetro 'search' es requerido." });
     }
-    console.log(search)
-
+    
     const query = `
-      SELECT 
+    SELECT 
         a.Codigo, 
         a.Descripcion, 
         ROUND(IF(a.fabricante = 'YUKEN KOGYO CO.,LTD.', b.Precio, 
@@ -1113,7 +1528,7 @@ app.get("/api/buscarCodigoDetalle", authenticateToken, async (req, res) => {
           productosprecios 
           ON productosprecios.IDProducto = productosinsumos.IDProductoInsumo
         WHERE 
-          productos.codigo LIKE ?  
+          productos.codigo LIKE ?   
           AND productos.Inhabilitado = 0 
           AND productos.estado = 0 
           AND productos.Fabricante <> 'GRUPO TORNADO S.A.'
@@ -1155,7 +1570,7 @@ app.get("/api/buscarCodigoDetalle", authenticateToken, async (req, res) => {
         LEFT JOIN 
           productosstockmovimientos 
           ON (productosstockmovimientos.idproducto = productos.recid)
-        WHERE 
+        WHERE productos.codigo LIKE ? AND
           (productosstock.controlastock = 1 
           AND productosstockmovimientos.tipo <> 2
           AND productosstockmovimientos.tipo <> 3 
@@ -1170,19 +1585,121 @@ app.get("/api/buscarCodigoDetalle", authenticateToken, async (req, res) => {
           pedidositems.IDProducto
         FROM 
           pedidositems
-        WHERE 
+        WHERE pedidositems.Codigo LIKE ? AND
           pedidositems.Estado = 0
         GROUP BY 
           pedidositems.IDProducto) AS D
       ON 
         A.RECID = D.IDProducto
       GROUP BY 
-        a.recid 
-    `;
+        a.recid
+    `
+
+    // const query = `
+    //   SELECT 
+    //     a.Codigo, 
+    //     a.Descripcion, 
+    //     ROUND(IF(a.fabricante = 'YUKEN KOGYO CO.,LTD.', b.Precio, 
+    //     (IFNULL(a.PrecioArmado, b.Precio))), 2) AS 'Precio', 
+    //     a.Recid,  
+    //     IF(a.codtransporte = '', 'sin', CONCAT('https://portal-distritec.com.ar/', a.codtransporte)) AS catalogo, 
+    //     b.NroMonedaPrecio, 
+    //     c.Stock AS Stock_Gral, 
+    //     d.total_pedido, 
+    //     IFNULL((c.Stock - d.total_pedido),0) AS Stock, a.CodigoFabricante
+    //   FROM 
+    //     (SELECT 
+    //       productos.Codigo, 
+    //       productos.Descripcion, 
+    //       SUM(productosinsumos.Cantidad * productosprecios.Precio) AS 'PrecioArmado', 
+    //       productos.Recid, 
+    //       productos.TipoProducto, 
+    //       productos.Fabricante, 
+    //       productosprecios.NroLista,
+    //       ROUND(productosprecios.Precio * (SELECT cotmoneda2 FROM monedacotizaciones ORDER BY fechahora DESC LIMIT 1), 2) AS 'Precio2', 
+    //       productos.CodigoFabricante, 
+    //       productos.Nombre, 
+    //       productos.codtransporte, 
+    //       productos.descripcion3
+    //     FROM 
+    //       productos
+    //     LEFT JOIN 
+    //       productosinsumos 
+    //       ON productosinsumos.IDProducto = productos.RecID
+    //     LEFT JOIN 
+    //       productosprecios 
+    //       ON productosprecios.IDProducto = productosinsumos.IDProductoInsumo
+    //     WHERE 
+    //       productos.codigo LIKE ?  
+    //       AND productos.Inhabilitado = 0 
+    //       AND productos.estado = 0 
+    //       AND productos.Fabricante <> 'GRUPO TORNADO S.A.'
+    //     GROUP BY 
+    //       productos.recid) AS A
+    //   LEFT JOIN 
+    //     (SELECT 
+    //       productosprecios.Precio AS 'Precio', 
+    //       productos.Recid, 
+    //       productosprecios.NroMonedaPrecio
+    //     FROM 
+    //       productos
+    //     LEFT JOIN 
+    //       productosprecios 
+    //       ON productosprecios.IDProducto = productos.RecID
+    //     WHERE  
+    //       productos.codigo LIKE ? 
+    //       AND productos.Inhabilitado = 0  
+    //       AND productosprecios.Precio <> 0 
+    //     ORDER BY 
+    //       productos.Codigo DESC) AS B
+    //   ON 
+    //     A.RECID = B.RECID
+    //   LEFT JOIN
+    //     (SELECT 
+    //       SUM(CASE productosstockmovimientos.TIPO
+    //         WHEN 0 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+    //         WHEN 1 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+    //         WHEN 2 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+    //         WHEN 3 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia) 
+    //         ELSE 0 
+    //       END) AS 'Stock', 
+    //       productos.recid
+    //     FROM 
+    //       productos
+    //     LEFT JOIN 
+    //       productosstock 
+    //       ON (productosstock.idproducto = productos.recid)
+    //     LEFT JOIN 
+    //       productosstockmovimientos 
+    //       ON (productosstockmovimientos.idproducto = productos.recid)
+    //     WHERE 
+    //       (productosstock.controlastock = 1 
+    //       AND productosstockmovimientos.tipo <> 2
+    //       AND productosstockmovimientos.tipo <> 3 
+    //       OR productosstockmovimientos.tipo IS NULL)
+    //     GROUP BY 
+    //       productos.recid) AS C
+    //   ON 
+    //     A.RECID = C.RECID
+    //   LEFT JOIN
+    //     (SELECT 
+    //       SUM(CAST(pedidositems.escenario AS DECIMAL)) AS total_pedido, 
+    //       pedidositems.IDProducto
+    //     FROM 
+    //       pedidositems
+    //     WHERE 
+    //       pedidositems.Estado = 0
+    //     GROUP BY 
+    //       pedidositems.IDProducto) AS D
+    //   ON 
+    //     A.RECID = D.IDProducto
+    //   GROUP BY 
+    //     a.recid 
+    // `;
     const searchPattern = `%${search}%`;
 
     // Verifica los parámetros en el query
-    pool.query(query, [searchPattern, searchPattern], (err, results) => {
+    pool.query(query, [searchPattern, searchPattern, searchPattern, searchPattern], (err, results) => {
         if (err) {
             console.error("Error al ejecutar la consulta:", err);
             return res.status(500).json({ message: "Error interno del servidor" });
@@ -1191,7 +1708,6 @@ app.get("/api/buscarCodigoDetalle", authenticateToken, async (req, res) => {
         console.log(results)
     });
 });
-
 app.get("/api/buscarMovimientoDetalle", authenticateToken, async (req, res) => {
     const { search } = req.query;
 
@@ -1219,7 +1735,6 @@ LIMIT 50
         console.log(results)
     });
 });
-
 app.get("/api/buscarRequeimientoDetalle", authenticateToken, async (req, res) => {
     const { search } = req.query;
 
@@ -1247,11 +1762,58 @@ LIMIT 10
     });
 });
 app.get('/api/objetivos', authenticateToken, (req, res) => {
+    console.log("mes")
+
     const idusuario = req.user.userId;
+    const mes = parseInt(req.query.mes);
 
-    const query = `SELECT * FROM objetivosdiarios WHERE idusuario=?`;
+    if (!mes || isNaN(mes)) {
+        return res.status(400).json({ message: 'Parámetro "mes" es requerido y debe ser numérico.' });
+    }
 
-    pool.query(query, [idusuario], (err, results) => {
+    const queryDiarios = `SELECT * FROM objetivosdiarios WHERE idusuario = ?`;
+
+    const queryMensual = `
+        SELECT * FROM objetivomensual 
+        WHERE idusuario = ? AND mes = ? AND modulo IN (1, 2, 4)
+    `;
+
+    pool.query(queryDiarios, [idusuario], (err, diariosResult) => {
+        if (err) {
+            console.error('Error al obtener objetivos diarios:', err);
+            return res.status(500).json({ message: 'Error interno al obtener diarios' });
+        }
+
+        pool.query(queryMensual, [idusuario, mes], (err2, mensualResult) => {
+            if (err2) {
+                console.error('Error al obtener objetivos mensuales:', err2);
+                return res.status(500).json({ message: 'Error interno al obtener mensuales' });
+            }
+
+            // Agrupar resultados por módulo
+            const mensual = {
+                facturacion: mensualResult.find(row => row.modulo === 1) || {},
+                pedidos: mensualResult.find(row => row.modulo === 2) || {},
+                requerimientos: mensualResult.find(row => row.modulo === 4) || {},
+            };
+
+            res.status(200).json({
+                objetivos: {
+                    diario: diariosResult[0] || {},
+                    mensual
+                }
+            });
+        });
+    });
+});
+app.get('/api/objetivoMesSeleccion', authenticateToken, (req, res) => {
+    const idusuario = req.user.userId;
+    const mes = parseInt(req.query.mes);
+    const modulo = parseInt(req.query.modulo);
+
+    const query = `SELECT * FROM objetivomensual WHERE idusuario=? AND mes=? AND modulo=?`;
+
+    pool.query(query, [idusuario, mes, modulo], (err, results) => {
         if (err) {
             console.error('Error al ejecutar la consulta:', err);
             return res.status(500).json({ message: 'Error interno del servidor' });
@@ -1259,6 +1821,67 @@ app.get('/api/objetivos', authenticateToken, (req, res) => {
         res.status(200).json(results[0]);
     });
 });
+app.get('/api/datosUser', authenticateToken, (req, res) => {
+    const idusuario = req.user.userId;
+
+
+    const query = `SELECT * FROM usersapp WHERE id= ?`;
+
+    pool.query(query, [idusuario], (err, results) => {
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor' });
+        }
+        console.log(results)
+        res.status(200).json(results);
+    });
+});
+app.post("/api/saveObjetivoMes", authenticateToken, async (req, res) => {
+    const idusuario = req.user.userId;
+    const { key: modulo, value, mes } = req.body;
+
+    try {
+        // Primero comprobamos si ya existe el registro
+        const [rows] = await pool.promise().execute(
+            `SELECT id FROM objetivomensual WHERE idusuario = ? AND mes = ? AND modulo = ?`,
+            [idusuario, mes, modulo]
+        );
+
+        if (rows.length > 0) {
+            // Si existe, actualizamos
+            await pool.promise().execute(
+                `UPDATE objetivomensual SET valor = ? WHERE idusuario = ? AND mes = ? AND modulo = ?`,
+                [value, idusuario, mes, modulo]
+            );
+            res.status(200).json({ message: `Objetivo actualizado correctamente` });
+        } else {
+            // Si no existe, insertamos
+            await pool.promise().execute(
+                `INSERT INTO objetivomensual (idusuario, mes, modulo, valor) VALUES (?, ?, ?, ?)`,
+                [idusuario, mes, modulo, value]
+            );
+            res.status(201).json({ message: `Objetivo creado correctamente` });
+        }
+    } catch (error) {
+        console.error("Error al guardar el objetivo:", error);
+        res.status(500).json({ message: "Error interno del servidor" });
+    }
+});
+
+// app.get('/api/objetivos', authenticateToken, (req, res) => {
+//     const idusuario = req.user.userId;
+
+//     const query = `SELECT * FROM objetivosdiarios WHERE idusuario=?`;
+
+//     pool.query(query, [idusuario], (err, results) => {
+//         if (err) {
+//             console.error('Error al ejecutar la consulta:', err);
+//             return res.status(500).json({ message: 'Error interno del servidor' });
+//         }
+//         res.status(200).json(results[0]);
+//     });
+// });
+
 app.post("/api/saveObjetivo", authenticateToken, async (req, res) => {
     const idusuario = req.user.userId;
     const { key, value } = req.body;
@@ -1293,6 +1916,539 @@ app.post("/api/saveObjetivo", authenticateToken, async (req, res) => {
         res.status(500).json({ message: "Error interno del servidor" });
     }
 });
+app.get('/api/detalleProductoSeleccionado', authenticateToken, (req, res) => {
+    const { codigo, fechaDesde, fechaHasta } = req.query;
+
+    const query = `
+        SELECT
+            IFNULL((
+                SELECT SUM(ri.cantidad) 
+                FROM requerimientositems ri
+                JOIN requerimientos r ON r.RecID = ri.IDRequerimiento 
+                WHERE ri.Codigo = ? AND DATE(r.FechaCreacion) BETWEEN ? AND ?
+            ),0) AS Cant_req,
+
+            IFNULL((
+                SELECT SUM(ri.ImportePrecio1) 
+                FROM requerimientositems ri
+                JOIN requerimientos r ON r.RecID = ri.IDRequerimiento 
+                WHERE ri.Codigo = ? AND DATE(r.FechaCreacion) BETWEEN ? AND ?
+            ),0) AS SubTotal_req,
+
+            fiscal.RazonSocial, 
+            usuarios.Usuario, 
+            facturas.id,
+            CAST(CONCAT(LPAD(talonarios.NroSucursal,5,'0'),'-', LPAD(facturas.Numero,8,'0')) AS CHAR) AS Numero, 
+            facturas.FechaCreacion,
+            facturas.SubTotal AS SubTotal2, 
+            facturas.Estado, 
+            facturas.NroMoneda,
+
+            IF(
+                facturas.NroMoneda = 1, 
+                IF(facturas.Tipo = 0, 
+                    IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), (facturas.SubTotal - facturas.ImporteDescuento)), 
+                    IF(facturas.TipoMultitipo = 2, -(facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), -(facturas.SubTotal - facturas.ImporteDescuento))
+                ), 
+                IF(facturas.Tipo = 0, 
+                    IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2, (facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2), 
+                    IF(facturas.TipoMultitipo = 2, -((facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2), -((facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2))
+                )
+            ) AS SubTotal,
+
+            SUM(facturasitems.Cantidad) AS TotalCantidad,
+            SUM(facturasitems.ImportePrecio1) AS TotalImportePrecio1
+
+        FROM facturas
+        JOIN facturasitems ON facturasitems.IDFactura = facturas.recid
+        JOIN fiscal ON fiscal.RecID = facturas.IDFiscal
+        JOIN usuarios ON usuarios.RecID = facturas.IDUsuario
+        JOIN talonarios ON talonarios.RecID = facturas.IDTalonario
+        LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = facturas.IDCotizacionMoneda
+
+        WHERE 
+            facturasitems.Codigo = ? AND 
+            DATE(facturas.FechaCreacion) BETWEEN ? AND ? AND
+            facturas.Estado IN (0, 1, 5)
+
+        GROUP BY 
+            facturas.recid,
+            fiscal.RazonSocial, 
+            usuarios.Usuario, 
+            facturas.id, 
+            talonarios.NroSucursal, 
+            facturas.Numero, 
+            facturas.FechaCreacion, 
+            facturas.SubTotal, 
+            facturas.Estado, 
+            facturas.NroMoneda, 
+            facturas.Tipo, 
+            facturas.TipoMultitipo, 
+            facturas.ImporteDescuento, 
+            facturas.Impuesto, 
+            monedacotizaciones.CotMoneda2
+
+        ORDER BY facturas.Total DESC
+    `;
+
+    const allValues = [
+        codigo, fechaDesde, fechaHasta, // Subquery Cant_req
+        codigo, fechaDesde, fechaHasta, // Subquery SubTotal_req
+        codigo, fechaDesde, fechaHasta  // Main query
+    ];
+
+    pool.query(query, allValues, (err, results) => {
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor', error: err.sqlMessage });
+        }
+
+        res.status(200).json(results);
+    });
+});
+app.get('/api/facturasmes', authenticateToken, (req, res) => {
+    const idusuario = req.user.userId;
+    const mes = parseInt(req.query.mes);
+    const modulo1 = 1;
+    const modulo2 = 2;
+    const modulo4 = 4;
+    console.log(idusuario)
+
+    const facturasQuery = `
+        SELECT
+            (
+                SELECT 
+                    SUM( IF(
+                        facturas.NroMoneda = 1, 
+                        IF(facturas.Tipo = 0, 
+                            IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), (facturas.SubTotal - facturas.ImporteDescuento)), 
+                            IF(facturas.TipoMultitipo = 2, -(facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), -(facturas.SubTotal - facturas.ImporteDescuento))
+                        ), 
+                        IF(facturas.Tipo = 0, 
+                            IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2, (facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2), 
+                            IF(facturas.TipoMultitipo = 2, -((facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2), -((facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2))
+                        )
+                    )) 
+                FROM facturas
+                LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = facturas.IDCotizacionMoneda
+                WHERE facturas.Estado IN (0, 1, 5) AND MONTH(facturas.FechaCreacion) = ? AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE())
+            ) AS suma_facturas,
+            (
+                SELECT COUNT(*) 
+                FROM facturas
+                WHERE MONTH(facturas.FechaCreacion) = ?
+                  AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE()) 
+                  AND facturas.Estado IN (0, 1, 5)
+            ) AS cantidad_facturas,
+            (
+                SELECT valor 
+                FROM objetivomensual 
+                WHERE idusuario = ? AND modulo = ? AND mes = ?
+            ) AS objetivo_facturas
+    `;
+
+    const pedidosQuery = `
+        SELECT
+            SUM(suma) AS suma_pedidos,
+            SUM(cantidad) AS cantidad_pedidos,
+            (
+                SELECT valor 
+                FROM objetivomensual 
+                WHERE idusuario = ? AND modulo = ? AND mes = ?
+            ) AS objetivo_pedidos
+        FROM resumen_pedidos 
+        WHERE MONTH(creado_en) = ? AND YEAR(creado_en) = YEAR(CURDATE())
+    `;
+
+    const presupuestosQuery = `
+        SELECT   
+            IF (presupuestos.NroMoneda=1, presupuestos.SubTotal2, presupuestos.SubTotal2 * monedacotizaciones.CotMoneda2) AS subtotal,
+            presupuestos.estado
+        FROM presupuestos
+        JOIN presupuestositems ON presupuestositems.IDPresupuesto = presupuestos.RecID
+        JOIN contactos ON contactos.IDContacto = presupuestos.IDRef
+        JOIN empresas ON empresas.IDEmpresa = contactos.IDEmpresa
+        JOIN fiscal ON fiscal.IDRef = empresas.IDEmpresa AND fiscal.Defecto = 1
+        JOIN usuarios ON usuarios.recid = presupuestos.IDUsuarioCreacion
+        LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = presupuestositems.IDCotizacionMoneda
+        WHERE MONTH(presupuestos.FechaCreacion) = ? 
+          AND YEAR(presupuestos.FechaCreacion) = YEAR(CURDATE())
+          AND presupuestos.Estado <> 2
+        GROUP BY presupuestos.RecID
+        ORDER BY presupuestos.FechaCreacion DESC
+    `;
+
+    const requerimientosQuery = `
+        SELECT 
+            SUM(requerimientos.SubTotal2) AS subtotal,
+            (
+                SELECT valor 
+                FROM objetivomensual 
+                WHERE modulo = ? AND idusuario = ?  AND mes = ?
+    LIMIT 1
+            ) AS objetivo
+        FROM requerimientos 
+        JOIN fiscal ON fiscal.recid = requerimientos.IDFiscal
+        WHERE fiscal.RazonSocial = 'AUTOMAC.MICROMECANICA S.A.I.C.'
+          AND MONTH(requerimientos.FechaCreacion) = ?
+          AND YEAR(requerimientos.FechaCreacion) = YEAR(CURDATE())
+    `;
+
+    const facturasParams = [mes, mes, idusuario, modulo1, mes];
+    const pedidosParams = [idusuario, modulo2, mes, mes];
+    const presupuestosParams = [mes];
+    const requerimientosParams = [modulo4, idusuario, mes, mes];
+
+    const facturasPromise = new Promise((resolve, reject) => {
+        pool.query(facturasQuery, facturasParams, (err, results) => {
+            if (err) return reject(err);
+            resolve(results[0]);
+        });
+    });
+
+    const pedidosPromise = new Promise((resolve, reject) => {
+        pool.query(pedidosQuery, pedidosParams, (err, results) => {
+            if (err) return reject(err);
+            resolve(results[0]);
+        });
+    });
+
+    const presupuestosPromise = new Promise((resolve, reject) => {
+        pool.query(presupuestosQuery, presupuestosParams, (err, results) => {
+            if (err) return reject(err);
+            resolve(results);
+        });
+    });
+
+    const requerimientosPromise = new Promise((resolve, reject) => {
+        pool.query(requerimientosQuery, requerimientosParams, (err, results) => {
+            if (err) return reject(err);
+            resolve(results[0]);
+        });
+    });
+
+    Promise.all([facturasPromise, pedidosPromise, presupuestosPromise, requerimientosPromise])
+        .then(([facturas, pedidos, presupuestos, requerimientos]) => {
+            res.status(200).json({
+                facturas,
+                pedidos,
+                presupuestos,
+                requerimientos
+            });
+        })
+        .catch(err => {
+            console.error('Error al ejecutar una de las consultas:', err);
+            res.status(500).json({ message: 'Error interno del servidor' });
+        });
+});
+app.get('/api/home', authenticateToken, (req, res) => {
+    const idusuario = req.user.userId;
+   
+
+    const queries = {
+        facturas: `
+            SELECT
+                (SELECT 
+                    ROUND(
+                        SUM(
+                            CASE 
+                                WHEN facturas.tipo = 1 THEN
+                                    CASE
+                                        WHEN facturas.NroMoneda = 1 THEN 
+                                            IF(facturas.TipoMultitipo=2,-(facturas.subtotal - Impuesto), -facturas.Subtotal)
+                                        WHEN facturas.NroMoneda = 2 THEN 
+                                            IF(facturas.TipoMultitipo=2,-(facturas.subtotal - Impuesto), -facturas.Subtotal) * (
+                                                SELECT cotmoneda2 FROM monedacotizaciones ORDER BY fechahora DESC LIMIT 1
+                                            )
+                                        WHEN facturas.NroMoneda = 3 THEN 
+                                            -facturas.Subtotal * (
+                                                SELECT cotmoneda3 FROM monedacotizaciones ORDER BY fechahora DESC LIMIT 1
+                                            )
+                                        ELSE 0
+                                    END
+                                ELSE
+                                    CASE
+                                        WHEN facturas.NroMoneda = 1 THEN 
+                                            IF(facturas.TipoMultitipo=2,(facturas.subtotal - Impuesto), facturas.Subtotal)
+                                        WHEN facturas.NroMoneda = 2 THEN 
+                                            IF(facturas.TipoMultitipo=2,-(facturas.subtotal - Impuesto), facturas.Subtotal) * (
+                                                SELECT cotmoneda2 FROM monedacotizaciones ORDER BY fechahora DESC LIMIT 1
+                                            )
+                                        WHEN facturas.NroMoneda = 3 THEN 
+                                            facturas.Subtotal * (
+                                                SELECT cotmoneda3 FROM monedacotizaciones ORDER BY fechahora DESC LIMIT 1
+                                            )
+                                        ELSE 0
+                                    END
+                            END
+                        ), 
+                    2)
+                FROM facturas
+                WHERE DATE(facturas.FechaCreacion) = CURDATE() 
+                  AND facturas.Estado IN (0, 1, 5)
+                ) AS suma,
+
+                (SELECT COUNT(*) 
+                 FROM facturas
+                 WHERE DATE(facturas.FechaCreacion) = CURDATE() 
+                   AND facturas.Estado IN (0, 1, 5)
+                ) AS cantidad,
+
+                (SELECT facturas 
+                 FROM objetivosmensuales 
+                 WHERE idusuario = ?) AS objetivo_mensual,
+
+                (SELECT facturas 
+                 FROM objetivosdiarios 
+                 WHERE idusuario = ?) AS objetivo_diario
+            FROM facturas
+            JOIN fiscal ON fiscal.RecID = facturas.IDFiscal
+            WHERE DATE(facturas.FechaCreacion) = CURDATE() 
+              AND facturas.Estado IN (0, 1, 5)
+            ORDER BY facturas.Total DESC
+            LIMIT 1;
+        `,
+        pedidos: `
+            SELECT *, 
+                (SELECT pedidos 
+                 FROM objetivosdiarios 
+                 WHERE idusuario = ?) AS objetivo_diario
+            FROM resumen_pedidos
+            WHERE DATE(resumen_pedidos.creado_en) = CURDATE()
+        `,
+        presupuestos: `
+            SELECT *, 
+                (SELECT presupuestos 
+                 FROM objetivosdiarios 
+                 WHERE idusuario = ?) AS objetivo_diario
+            FROM resumen_presupuestos
+            WHERE DATE(resumen_presupuestos.creado_en) = CURDATE()
+        `,
+        requerimientos: `
+            SELECT SUM(requerimientos.SubTotal2) AS suma, COUNT(*) AS cantidad
+            FROM requerimientos
+            WHERE DATE(requerimientos.FechaCreacion) = CURDATE() AND requerimientos.Estado = 0
+        `
+    };
+
+    // Ejecutamos todas las consultas en paralelo
+    Promise.all([
+        new Promise((resolve, reject) => {
+            pool.query(queries.facturas, [idusuario, idusuario], (err, results) => {
+                if (err) return reject(err);
+                resolve(results[0] || {});
+            });
+        }),
+        new Promise((resolve, reject) => {
+            pool.query(queries.pedidos, [idusuario], (err, results) => {
+                if (err) return reject(err);
+                resolve(results[0] || {});
+            });
+        }),
+        new Promise((resolve, reject) => {
+            pool.query(queries.presupuestos, [idusuario], (err, results) => {
+                if (err) return reject(err);
+                resolve(results[0] || {});
+            });
+        }),
+        new Promise((resolve, reject) => {
+            pool.query(queries.requerimientos, (err, results) => {
+                if (err) return reject(err);
+                resolve(results[0] || {});
+            });
+        }),
+    ])
+    .then(([facturas, pedidos, presupuestos, requerimientos]) => {
+        res.json({
+            facturas,
+            pedidos,
+            presupuestos,
+            requerimientos
+        });
+    })
+    .catch(err => {
+        console.error('Error al ejecutar las consultas:', err);
+        res.status(500).json({ message: 'Error interno del servidor' });
+    });
+});
+
+
+// app.get('/api/facturasmes', authenticateToken, (req, res) => {
+//     const idusuario = req.user.userId;
+//     const mes = parseInt(req.query.mes);
+//     const modulo1 = 1;
+//     const modulo2 = 2;
+
+//     const facturasQuery = `
+//         SELECT
+//             (
+//                 SELECT 
+//                     SUM( IF(
+//                         facturas.NroMoneda = 1, 
+//                         IF(facturas.Tipo = 0, 
+//                             IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), (facturas.SubTotal - facturas.ImporteDescuento)), 
+//                             IF(facturas.TipoMultitipo = 2, -(facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), -(facturas.SubTotal - facturas.ImporteDescuento))
+//                         ), 
+//                         IF(facturas.Tipo = 0, 
+//                             IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2, (facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2), 
+//                             IF(facturas.TipoMultitipo = 2, -((facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2), -((facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2))
+//                         )
+//                     )) 
+//                 FROM facturas
+//                 LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = facturas.IDCotizacionMoneda
+//                 WHERE facturas.Estado IN (0, 1, 5) AND MONTH(facturas.FechaCreacion) = ? AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE())
+//             ) AS suma_facturas,
+//             (
+//                 SELECT COUNT(*) 
+//                 FROM facturas
+//                 WHERE MONTH(facturas.FechaCreacion) = ?
+//                   AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE()) 
+//                   AND facturas.Estado IN (0, 1, 5)
+//             ) AS cantidad_facturas,
+//             (
+//                 SELECT valor 
+//                 FROM objetivomensual 
+//                 WHERE idusuario = ? AND modulo = ? AND mes = ?
+//             ) AS objetivo_facturas
+//     `;
+
+//     const pedidosQuery = `
+//         SELECT
+//             SUM(suma) AS suma_pedidos,
+//             SUM(cantidad) AS cantidad_pedidos,
+//             (
+//                 SELECT valor 
+//                 FROM objetivomensual 
+//                 WHERE idusuario = ? AND modulo = ? AND mes = ?
+//             ) AS objetivo_pedidos
+//         FROM resumen_pedidos 
+//         WHERE MONTH(creado_en) = ? AND YEAR(creado_en) = YEAR(CURDATE())
+//     `;
+
+//     const presupuestosQuery = `
+//         SELECT   
+//             IF (presupuestos.NroMoneda=1, presupuestos.SubTotal2, presupuestos.SubTotal2 * monedacotizaciones.CotMoneda2) AS subtotal,
+//             presupuestos.estado
+//         FROM presupuestos
+//         JOIN presupuestositems ON presupuestositems.IDPresupuesto = presupuestos.RecID
+//         JOIN contactos ON contactos.IDContacto = presupuestos.IDRef
+//         JOIN empresas ON empresas.IDEmpresa = contactos.IDEmpresa
+//         JOIN fiscal ON fiscal.IDRef = empresas.IDEmpresa AND fiscal.Defecto = 1
+//         JOIN usuarios ON usuarios.recid = presupuestos.IDUsuarioCreacion
+//         LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = presupuestositems.IDCotizacionMoneda
+//         WHERE MONTH(presupuestos.FechaCreacion) = ? 
+//           AND YEAR(presupuestos.FechaCreacion) = YEAR(CURDATE())
+//           AND presupuestos.Estado <> 2
+//         GROUP BY presupuestos.RecID
+//         ORDER BY presupuestos.FechaCreacion DESC
+//     `;
+
+//     const facturasParams = [mes, mes, idusuario, modulo1, mes];
+//     const pedidosParams = [idusuario, modulo2, mes, mes];
+//     const presupuestosParams = [mes];
+
+//     // Ejecutar las tres consultas en paralelo
+//     const facturasPromise = new Promise((resolve, reject) => {
+//         pool.query(facturasQuery, facturasParams, (err, results) => {
+//             if (err) return reject(err);
+//             resolve(results[0]);
+//         });
+//     });
+
+//     const pedidosPromise = new Promise((resolve, reject) => {
+//         pool.query(pedidosQuery, pedidosParams, (err, results) => {
+//             if (err) return reject(err);
+//             resolve(results[0]);
+//         });
+//     });
+
+//     const presupuestosPromise = new Promise((resolve, reject) => {
+//         pool.query(presupuestosQuery, presupuestosParams, (err, results) => {
+//             if (err) return reject(err);
+//             resolve(results);
+//         });
+//     });
+
+//     Promise.all([facturasPromise, pedidosPromise, presupuestosPromise])
+//         .then(([facturas, pedidos, presupuestos]) => {
+//             res.status(200).json({
+//                 facturas,
+//                 pedidos,
+//                 presupuestos
+//             });
+//         })
+//         .catch(err => {
+//             console.error('Error al ejecutar una de las consultas:', err);
+//             res.status(500).json({ message: 'Error interno del servidor' });
+//         });
+// });
+
+// app.get('/api/facturasmes', authenticateToken, (req, res) => {
+//     const idusuario = req.user.userId;
+//     const mes = parseInt(req.query.mes); 
+//     const modulo = 1
+
+//     const query = `
+//         SELECT
+//         (
+//             SELECT 
+//                 SUM( IF(
+//                     facturas.NroMoneda = 1, 
+//                     IF(facturas.Tipo = 0, 
+//                         IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), (facturas.SubTotal - facturas.ImporteDescuento)), 
+//                         IF(facturas.TipoMultitipo = 2, -(facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), -(facturas.SubTotal - facturas.ImporteDescuento))
+//                     ), 
+//                     IF(facturas.Tipo = 0, 
+//                         IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2, (facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2), 
+//                         IF(facturas.TipoMultitipo = 2, -((facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2), -((facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2))
+//                     )
+//                 )) AS suma      
+//             FROM facturas
+//             JOIN fiscal ON fiscal.RecID = facturas.IDFiscal
+//             JOIN usuarios ON usuarios.RecID = facturas.IDUsuario
+//             JOIN talonarios ON talonarios.RecID = facturas.IDTalonario
+//             LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = facturas.IDCotizacionMoneda
+//             WHERE facturas.Estado IN (0, 1, 5) AND MONTH(facturas.FechaCreacion) = ? AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE())
+//         ) AS suma,         
+
+//         (
+//             SELECT COUNT(*) 
+//             FROM facturas
+//             WHERE MONTH(facturas.FechaCreacion) = ?
+//               AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE()) 
+//               AND facturas.Estado IN (0, 1, 5)
+//         ) AS cantidad,
+
+//         (
+//             SELECT valor 
+//             FROM objetivomensual 
+//             WHERE idusuario = ? AND modulo = ? AND mes = ?
+//         ) AS objetivo_mensual
+
+//         FROM facturas
+//         JOIN fiscal ON fiscal.RecID = facturas.IDFiscal
+//         WHERE MONTH(facturas.FechaCreacion) = ?
+//           AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE())
+//           AND facturas.Estado IN (0, 1, 5)
+//         ORDER BY facturas.Total DESC
+//         LIMIT 1;
+//     `;
+
+//     // Parámetros en el mismo orden que los signos de ?
+//     const params = [mes, mes, idusuario, modulo, mes, mes];
+
+//     pool.query(query, params, (err, results) => {
+//         if (err) {
+//             console.error('Error al ejecutar la consulta:', err);
+//             return res.status(500).json({ message: 'Error interno del servidor' });
+//         }
+//         res.status(200).json(results[0]);
+//     });
+// });
+
+
+
+
 
 
 
