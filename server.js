@@ -2303,9 +2303,23 @@ app.get('/api/home', authenticateToken, (req, res) => {
             WHERE DATE(resumen_presupuestos.creado_en) = CURDATE()
         `,
         requerimientos: `
-            SELECT SUM(requerimientos.SubTotal2) AS suma, COUNT(*) AS cantidad
-            FROM requerimientos
-            WHERE DATE(requerimientos.FechaCreacion) = CURDATE() AND requerimientos.Estado = 0
+            SELECT 
+    SUM(subtotal_ajustado) AS suma,  -- Suma de los subtotales ajustados
+COUNT(*) AS cantidad
+FROM (
+    SELECT DISTINCT 
+        CASE 
+            WHEN requerimientos.nromoneda = 1 THEN requerimientos.SubTotal2
+            WHEN requerimientos.nromoneda = 2 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda2
+            WHEN requerimientos.nromoneda = 3 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda3
+            ELSE 0  -- Si nromoneda no es 1, 2 o 3, no se hace ningún cálculo
+        END AS subtotal_ajustado
+    FROM requerimientos 
+    JOIN requerimientositems ON requerimientositems.IDRequerimiento = requerimientos.recid
+    JOIN fiscal ON fiscal.recid = requerimientos.IDFiscal
+    JOIN monedacotizaciones ON monedacotizaciones.RecID = requerimientositems.IDCotizacionMoneda
+       WHERE DATE(requerimientos.FechaCreacion) = CURDATE() AND requerimientos.Estado = 0
+) AS subquery;
         `
     };
 
