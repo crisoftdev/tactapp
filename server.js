@@ -345,7 +345,7 @@ app.get('/api/requerimientosDetallemes', authenticateToken, (req, res) => {
     const tipo = parseInt(req.query.tipo);
     let query;
     if (tipo === 0) {
-         query = `
+        query = `
         SELECT 
    fiscal.RazonSocial, 
    requerimientos.Total,
@@ -369,7 +369,7 @@ JOIN fiscal ON fiscal.RecID = requerimientos.IDFiscal
 WHERE MONTH(requerimientos.FechaCreacion) = ?
 AND DATE(requerimientos.fechacreacion) = YEAR(CURDATE())`;
     } else if (tipo === 1) {
-         query = `
+        query = `
         SELECT 
         fiscal.RazonSocial, 
         requerimientos.Total,
@@ -1956,13 +1956,20 @@ app.get('/api/detalleProductoSeleccionado', authenticateToken, (req, res) => {
                 WHERE ri.Codigo = ? AND DATE(r.FechaCreacion) BETWEEN ? AND ?
             ),0) AS Cant_req,
 
-            IFNULL((
-                SELECT SUM(ri.ImportePrecio1) 
-                FROM requerimientositems ri
-                JOIN requerimientos r ON r.RecID = ri.IDRequerimiento 
-                WHERE ri.Codigo = ? AND DATE(r.FechaCreacion) BETWEEN ? AND ?
+                      IFNULL((
+               SELECT SUM(subtotal_con_descuento) AS total_final
+FROM (
+    SELECT 
+        SUM(ri.ImportePrecio1) * (1 - r.Descuento / 100) AS subtotal_con_descuento
+    FROM requerimientositems ri
+    JOIN requerimientos r ON r.RecID = ri.IDRequerimiento 
+    WHERE 
+        ri.Codigo = ? 
+        AND DATE(r.FechaCreacion) BETWEEN ? AND ?
+    GROUP BY ri.IDRequerimiento, r.Descuento
+) AS subconsulta
             ),0) AS SubTotal_req,
-
+            
             fiscal.RazonSocial, 
             usuarios.Usuario, 
             facturas.id,
@@ -1985,7 +1992,8 @@ app.get('/api/detalleProductoSeleccionado', authenticateToken, (req, res) => {
             ) AS SubTotal,
 
             SUM(facturasitems.Cantidad) AS TotalCantidad,
-            SUM(facturasitems.ImportePrecio1) AS TotalImportePrecio1
+             if ( facturas.tipo=0,  SUM(facturasitems.ImportePrecio1),  - SUM(facturasitems.ImportePrecio1)) AS TotalImportePrecio1,
+            SUM(facturasitems.ImportePrecio1) AS totalviejo
 
         FROM facturas
         JOIN facturasitems ON facturasitems.IDFactura = facturas.recid
@@ -2217,8 +2225,6 @@ FROM (
             res.status(500).json({ message: 'Error interno del servidor' });
         });
 });
-
-
 app.get('/api/home', authenticateToken, (req, res) => {
     const idusuario = req.user.userId;
 
@@ -2362,6 +2368,63 @@ FROM (
             console.error('Error al ejecutar las consultas:', err);
             res.status(500).json({ message: 'Error interno del servidor' });
         });
+});
+app.get("/api/buscarCodigoStock", async (req, res) => {
+    const { codigo } = req.query;
+    console.log(req.query)
+    if (!codigo) {
+        return res.status(400).json({ error: "El parámetro 'search' es requerido." });
+    }
+
+    const query = `
+    SELECT a.codigo, a.stock,b.total_pedido, a.stock-b.total_pedido AS stock_gral, CONCAT('https://portal-distritec.com.ar/imgProd/',a.CodigoFabricante,'.jpg') AS img
+FROM 
+(SELECT 
+          SUM(CASE productosstockmovimientos.TIPO
+            WHEN 0 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+            WHEN 1 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+            WHEN 2 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+            WHEN 3 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia) 
+            ELSE 0 
+          END) AS 'Stock', productos.CodigoFabricante, productos.codigo,
+          productos.recid
+        FROM 
+          productos
+        LEFT JOIN 
+          productosstock 
+          ON (productosstock.idproducto = productos.recid)
+        LEFT JOIN 
+          productosstockmovimientos 
+          ON (productosstockmovimientos.idproducto = productos.recid)
+        WHERE productos.codigo = ? AND
+          (productosstock.controlastock = 1 
+          AND productosstockmovimientos.tipo <> 2
+          AND productosstockmovimientos.tipo <> 3 
+          OR productosstockmovimientos.tipo IS NULL)
+        GROUP BY 
+          productos.recid) AS A
+          
+          LEFT JOIN
+        (SELECT 
+          SUM(CAST(pedidositems.escenario AS DECIMAL)) AS total_pedido, 
+          pedidositems.IDProducto
+        FROM 
+          pedidositems
+  		WHERE pedidositems.codigo = ? AND
+          pedidositems.Estado = 0
+        GROUP BY 
+          pedidositems.IDProducto) AS B
+          ON A.recid = b.IDProducto
+    `;
+
+    pool.query(query, [codigo, codigo], (err, results) => {
+        if (err) {
+            console.error("Error al ejecutar la consulta:", err);
+            return res.status(500).json({ message: "Error interno del servidor" });
+        }
+        console.log(results)
+        res.status(200).json(results);
+    });
 });
 
 
