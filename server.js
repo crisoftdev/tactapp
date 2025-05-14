@@ -2426,6 +2426,237 @@ FROM
         res.status(200).json(results);
     });
 });
+app.get("/api/stock", authenticateToken, async (req, res) => {
+    const fecha = req.query.fecha;
+    console.log(fecha)
+    if (!fecha) {
+        return res.status(400).json({ error: "El parámetro 'fecha' es requerido." });
+    }
+
+    try {
+        // QUERY 0: Obtener cotización del dólar
+        const [cotizacionRows] = await pool.promise().query(`
+            SELECT cotmoneda2 FROM monedacotizaciones  WHERE tipo=0 ORDER BY fechahora DESC LIMIT 1
+        `);
+
+        const cotizacion = cotizacionRows[0]?.cotmoneda2 || 1;
+
+        // QUERY 1: STOCK hasta fecha
+        const [stockData] = await pool.promise().query(`
+            SELECT 
+                SUM(CASE productosstockmovimientos.TIPO
+                    WHEN 0 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+                    WHEN 1 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+                    WHEN 2 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+                    WHEN 3 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+                    ELSE 0 
+                END) AS Stock,
+                productos.Codigo,
+                productos.Fabricante,
+                productos.Armado,
+                productos.RecID AS idproducto
+            FROM productos
+            LEFT JOIN productosstock ON productosstock.idproducto = productos.RecID
+            LEFT JOIN productosstockmovimientos ON productosstockmovimientos.idproducto = productos.RecID
+            WHERE productosstockmovimientos.Fecha <= ?
+                AND (productosstock.controlastock = 1 
+                    AND productosstockmovimientos.tipo <> 2
+                    AND productosstockmovimientos.tipo <> 3 
+                    OR productosstockmovimientos.tipo IS NULL)
+                AND productos.Inhabilitado = 0 
+                AND productos.Estado = 0
+            GROUP BY productos.RecID
+            HAVING Stock > 0
+            ORDER BY productos.Fabricante ASC
+        `, [fecha]);
+
+        // QUERY 2: PRECIOS ARMADOS
+        const [armadoData] = await pool.promise().query(`
+            SELECT 
+                SUM(productosinsumos.Cantidad * productosprecios.Precio) AS PrecioArmado,
+                SUM(productosinsumos.Cantidad * productosprecios.Costo) AS CostoArmado,
+                productos.RecID AS idproducto
+            FROM productos
+            LEFT JOIN productosinsumos ON productosinsumos.IDProducto = productos.RecID
+            LEFT JOIN productosprecios ON productosprecios.IDProducto = productosinsumos.IDProductoInsumo
+            WHERE productos.Inhabilitado = 0 AND productos.Estado = 0
+            GROUP BY productos.RecID
+        `);
+
+        // QUERY 3: PRECIOS DIRECTOS CON NroMonedaPrecio
+        const [precioData] = await pool.promise().query(`
+            SELECT 
+                productosprecios.Precio, 
+                productosprecios.Costo, 
+                productosprecios.NroMonedaPrecio,
+                productos.RecID AS idproducto
+            FROM productos
+            LEFT JOIN productosprecios ON productosprecios.IDProducto = productos.RecID
+            WHERE productos.Inhabilitado = 0 AND productosprecios.Precio <> 0
+        `);
+
+        // Mapas para acceso rápido
+        const armadoMap = new Map();
+        armadoData.forEach(item => armadoMap.set(item.idproducto, item));
+
+        const precioMap = new Map();
+        precioData.forEach(item => precioMap.set(item.idproducto, item));
+
+        // Armar resultado final
+        const resultados = stockData.map(prod => {
+            let precio = null;
+            let costo = null;
+
+            if (prod.Armado === 1) {
+                const armado = armadoMap.get(prod.idproducto);
+                if (armado) {
+                    precio = armado.PrecioArmado;
+                    costo = armado.CostoArmado;
+                }
+            } else {
+                const directo = precioMap.get(prod.idproducto);
+                if (directo) {
+                    if (directo.NroMonedaPrecio === 2) {
+                        precio = directo.Precio * cotizacion;
+                        costo = directo.Costo * cotizacion;
+                    } else {
+                        precio = directo.Precio;
+                        costo = directo.Costo;
+                    }
+                }
+            }
+
+            return {
+                codigo: prod.Codigo,
+                precio: precio !== null ? Number(precio.toFixed(2)) : null,
+                costo: costo !== null ? Number(costo.toFixed(2)) : null,
+                fabricante: prod.Fabricante,
+                stock: Number(prod.Stock)
+            };
+        });
+
+        res.status(200).json(resultados);
+    } catch (err) {
+        console.error("❌ Error al ejecutar /api/stock:", err);
+        res.status(500).json({ message: "Error interno del servidor" });
+    }
+});
+
+
+// app.get("/api/stock", authenticateToken, async (req, res) => {
+//     const fecha = (req.query.fecha);
+
+//     if (!fecha) {
+//         return res.status(400).json({ error: "El parámetro 'fecha' es requerido." });
+//     }
+
+//     try {
+//            // QUERY 0: PRECIOS DIRECTOS
+//         const query0 = `ROUND(productosprecios.Precio * (SELECT cotmoneda2 FROM monedacotizaciones ORDER BY fechahora DESC LIMIT 1), 2) AS 'Precio2'`;
+
+//         const [dolar] = await pool.promise().query(query0);
+
+//         // QUERY 1: STOCK
+//         const query1 = `
+//             SELECT 
+//                 SUM(CASE productosstockmovimientos.TIPO
+//                     WHEN 0 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+//                     WHEN 1 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+//                     WHEN 2 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+//                     WHEN 3 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+//                     ELSE 0 
+//                 END) AS Stock,
+//                 productos.Codigo,
+//                 productos.Fabricante,
+//                 productos.Armado,
+//                 productos.RecID AS idproducto
+//             FROM productos
+//             LEFT JOIN productosstock ON productosstock.idproducto = productos.RecID
+//             LEFT JOIN productosstockmovimientos ON productosstockmovimientos.idproducto = productos.RecID
+//             WHERE productosstockmovimientos.Fecha <= ?
+//                 AND (productosstock.controlastock = 1 
+//                     AND productosstockmovimientos.tipo <> 2
+//                     AND productosstockmovimientos.tipo <> 3 
+//                     OR productosstockmovimientos.tipo IS NULL)
+//                 AND productos.Inhabilitado = 0 
+//                 AND productos.Estado = 0
+//             GROUP BY productos.RecID
+//             HAVING Stock > 0
+//             ORDER BY productos.Fabricante ASC
+//         `;
+
+//         const [stockData] = await pool.promise().query(query1, [fecha]);
+
+//         // QUERY 2: PRECIOS ARMADOS
+//         const query2 = `
+//             SELECT 
+//                 SUM(productosinsumos.Cantidad * productosprecios.Precio) AS PrecioArmado,
+//                 SUM(productosinsumos.Cantidad * productosprecios.Costo) AS CostoArmado,
+//                 productos.RecID AS idproducto
+//             FROM productos
+//             LEFT JOIN productosinsumos ON productosinsumos.IDProducto = productos.RecID
+//             LEFT JOIN productosprecios ON productosprecios.IDProducto = productosinsumos.IDProductoInsumo
+//             WHERE productos.Inhabilitado = 0 AND productos.Estado = 0
+//             GROUP BY productos.RecID
+//         `;
+
+//         const [armadoData] = await pool.promise().query(query2);
+
+//         // QUERY 3: PRECIOS DIRECTOS
+//         const query3 = `
+//             SELECT 
+//                 productosprecios.Precio, productosprecios.Costo, productos.RecID AS idproducto
+//             FROM productos
+//             LEFT JOIN productosprecios ON productosprecios.IDProducto = productos.RecID
+//             WHERE productos.Inhabilitado = 0 AND productosprecios.Precio <> 0
+//         `;
+
+//         const [precioData] = await pool.promise().query(query3);
+
+      
+
+//         // Armar mapas para búsqueda rápida
+//         const armadoMap = new Map();
+//         armadoData.forEach(item => armadoMap.set(item.idproducto, item));
+
+//         const precioMap = new Map();
+//         precioData.forEach(item => precioMap.set(item.idproducto, item));
+
+//         // Construir resultado final
+//         const resultados = stockData.map(prod => {
+//             let precio = null;
+//             let costo = null;
+
+//             if (prod.Armado === 1) {
+//                 const armado = armadoMap.get(prod.idproducto);
+//                 if (armado) {
+//                     precio = armado.PrecioArmado;
+//                     costo = armado.CostoArmado;
+//                 }
+//             } else {
+//                 const directo = precioMap.get(prod.idproducto);
+//                 if (directo) {
+//                     precio = directo.Precio;
+//                     costo = directo.Costo;
+//                 }
+//             }
+
+//             return {
+//                 codigo: prod.Codigo,
+//                 precio: precio !== null ? Number(precio) : null,
+//                 costo: costo !== null ? Number(costo) : null,
+//                 fabricante: prod.Fabricante,
+//                 stock: Number(prod.Stock)
+//             };
+//         });
+
+//         res.status(200).json(resultados);
+//     } catch (err) {
+//         console.error("❌ Error al ejecutar /api/stock:", err);
+//         res.status(500).json({ message: "Error interno del servidor" });
+//     }
+// });
+
 
 
 // app.get('/api/facturasmes', authenticateToken, (req, res) => {
