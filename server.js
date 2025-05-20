@@ -6,6 +6,11 @@ const cors = require('cors');
 const mysql = require('mysql2');
 const axios = require('axios');
 const cron = require('node-cron');
+const ExcelJS = require('exceljs');
+const nodemailer = require('nodemailer');
+const fs = require('fs');
+const path = require('path');
+
 
 // Configuración de la base de datos MySQL
 const pool = mysql.createPool({
@@ -21,6 +26,7 @@ const pool = mysql.createPool({
 
 // Inicializar Express
 const app = express();
+app.use(express.json({ limit: '10mb' })); // permitir JSON grande
 
 // Middleware para JSON
 app.use(express.json());
@@ -2426,18 +2432,140 @@ FROM
         res.status(200).json(results);
     });
 });
+// app.get("/api/stock", authenticateToken, async (req, res) => {
+//     const fecha = req.query.fecha;
+//     console.log(fecha)
+//     if (!fecha) {
+//         return res.status(400).json({ error: "El parámetro 'fecha' es requerido." });
+//     }
+
+//     try {
+//         // QUERY 0: Obtener cotización del dólar
+//         const [cotizacionRows] = await pool.promise().query(`
+//             SELECT cotmoneda2 FROM monedacotizaciones  WHERE tipo=0 ORDER BY fechahora DESC LIMIT 1
+//         `);
+
+//         const cotizacion = cotizacionRows[0]?.cotmoneda2 || 1;
+
+//         // QUERY 1: STOCK hasta fecha
+//         const [stockData] = await pool.promise().query(`
+//             SELECT 
+//                 SUM(CASE productosstockmovimientos.TIPO
+//                     WHEN 0 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+//                     WHEN 1 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+//                     WHEN 2 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+//                     WHEN 3 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+//                     ELSE 0 
+//                 END) AS Stock,
+//                 productos.Codigo,
+//                 productos.Descripcion,
+//                 productos.Fabricante,
+//                 productos.Armado,
+//                 productos.RecID AS idproducto
+//             FROM productos
+//             LEFT JOIN productosstock ON productosstock.idproducto = productos.RecID
+//             LEFT JOIN productosstockmovimientos ON productosstockmovimientos.idproducto = productos.RecID
+//             WHERE productosstockmovimientos.Fecha <= ?
+//                 AND (productosstock.controlastock = 1 
+//                     AND productosstockmovimientos.tipo <> 2
+//                     AND productosstockmovimientos.tipo <> 3 
+//                     OR productosstockmovimientos.tipo IS NULL)
+//                 AND productos.Inhabilitado = 0 
+//                 AND productos.Estado = 0
+//             GROUP BY productos.RecID
+//             HAVING Stock > 0
+//             ORDER BY productos.Fabricante ASC
+//         `, [fecha]);
+
+//         // QUERY 2: PRECIOS ARMADOS
+//         const [armadoData] = await pool.promise().query(`
+//             SELECT 
+//                 SUM(productosinsumos.Cantidad * productosprecios.Precio) AS PrecioArmado,
+//                 SUM(productosinsumos.Cantidad * productosprecios.Costo) AS CostoArmado,
+//                 productos.RecID AS idproducto
+//             FROM productos
+//             LEFT JOIN productosinsumos ON productosinsumos.IDProducto = productos.RecID
+//             LEFT JOIN productosprecios ON productosprecios.IDProducto = productosinsumos.IDProductoInsumo
+//             WHERE productos.Inhabilitado = 0 AND productos.Estado = 0
+//             GROUP BY productos.RecID
+//         `);
+
+//         // QUERY 3: PRECIOS DIRECTOS CON NroMonedaPrecio
+//         const [precioData] = await pool.promise().query(`
+//             SELECT 
+//                 productosprecios.Precio, 
+//                 productosprecios.Costo, 
+//                 productosprecios.NroMonedaPrecio,
+//                 productos.RecID AS idproducto
+//             FROM productos
+//             LEFT JOIN productosprecios ON productosprecios.IDProducto = productos.RecID
+//             WHERE productos.Inhabilitado = 0 AND productosprecios.Precio <> 0
+//         `);
+
+//         // Mapas para acceso rápido
+//         const armadoMap = new Map();
+//         armadoData.forEach(item => armadoMap.set(item.idproducto, item));
+
+//         const precioMap = new Map();
+//         precioData.forEach(item => precioMap.set(item.idproducto, item));
+
+//         // Armar resultado final
+//         const resultados = stockData.map(prod => {
+//             let precio = null;
+//             let costo = null;
+
+//             if (prod.Armado === 1) {
+//                 const armado = armadoMap.get(prod.idproducto);
+//                 if (armado) {
+//                     precio = armado.PrecioArmado;
+//                     costo = armado.CostoArmado;
+//                 }
+//             } else {
+//                 const directo = precioMap.get(prod.idproducto);
+//                 if (directo) {
+//                     if (directo.NroMonedaPrecio === 2) {
+//                         precio = directo.Precio * cotizacion;
+//                         costo = directo.Costo * cotizacion;
+//                     } else {
+//                         precio = directo.Precio;
+//                         costo = directo.Costo;
+//                     }
+//                 }
+//             }
+
+//             return {
+//                 codigo: prod.Codigo,
+//                 descripcion: prod.Descripcion,
+//                 precio: precio !== null ? Number(precio.toFixed(2)) : null,
+//                 costo: costo !== null ? Number(costo.toFixed(2)) : null,
+//                 fabricante: prod.Fabricante,
+//                 stock: Number(prod.Stock)
+//             };
+//         });
+
+//         res.status(200).json(resultados);
+//     } catch (err) {
+//         console.error("❌ Error al ejecutar /api/stock:", err);
+//         res.status(500).json({ message: "Error interno del servidor" });
+//     }
+// });
 app.get("/api/stock", authenticateToken, async (req, res) => {
     const fecha = req.query.fecha;
-    console.log(fecha)
-    if (!fecha) {
-        return res.status(400).json({ error: "El parámetro 'fecha' es requerido." });
+    const tipoMoneda = parseInt(req.query.moneda); // 1 = ARS, 2 = USD
+    console.log(tipoMoneda)
+    if (!fecha || ![1, 2].includes(tipoMoneda)) {
+        return res.status(400).json({ error: "Los parámetros 'fecha' y 'moneda' (1 o 2) son requeridos." });
     }
 
     try {
         // QUERY 0: Obtener cotización del dólar
         const [cotizacionRows] = await pool.promise().query(`
-            SELECT cotmoneda2 FROM monedacotizaciones  WHERE tipo=0 ORDER BY fechahora DESC LIMIT 1
-        `);
+        SELECT cotmoneda2
+        FROM monedacotizaciones
+        WHERE tipo = 0 AND fechahora <= ?
+        ORDER BY fechahora DESC
+        LIMIT 1
+    `, [fecha]);
 
         const cotizacion = cotizacionRows[0]?.cotmoneda2 || 1;
 
@@ -2452,6 +2580,7 @@ app.get("/api/stock", authenticateToken, async (req, res) => {
                     ELSE 0 
                 END) AS Stock,
                 productos.Codigo,
+                productos.Descripcion,
                 productos.Fabricante,
                 productos.Armado,
                 productos.RecID AS idproducto
@@ -2483,7 +2612,7 @@ app.get("/api/stock", authenticateToken, async (req, res) => {
             GROUP BY productos.RecID
         `);
 
-        // QUERY 3: PRECIOS DIRECTOS CON NroMonedaPrecio
+        // QUERY 3: PRECIOS DIRECTOS
         const [precioData] = await pool.promise().query(`
             SELECT 
                 productosprecios.Precio, 
@@ -2497,12 +2626,48 @@ app.get("/api/stock", authenticateToken, async (req, res) => {
 
         // Mapas para acceso rápido
         const armadoMap = new Map();
-        armadoData.forEach(item => armadoMap.set(item.idproducto, item));
-
         const precioMap = new Map();
-        precioData.forEach(item => precioMap.set(item.idproducto, item));
 
-        // Armar resultado final
+        // Procesar armadoData según moneda
+        armadoData.forEach(item => {
+            let precio = item.PrecioArmado || 0;
+            let costo = item.CostoArmado || 0;
+
+            if (tipoMoneda === 2) { // USD
+                precio /= cotizacion;
+                costo /= cotizacion;
+            }
+
+            armadoMap.set(item.idproducto, {
+                PrecioArmado: precio,
+                CostoArmado: costo
+            });
+        });
+
+        // Procesar precioData según moneda
+        precioData.forEach(item => {
+            let precio = item.Precio || 0;
+            let costo = item.Costo || 0;
+
+            if (item.NroMonedaPrecio === 1 && tipoMoneda === 2) {
+                // ARS → USD
+                precio /= cotizacion;
+                costo /= cotizacion;
+            }
+
+            if (item.NroMonedaPrecio === 2 && tipoMoneda === 1) {
+                // USD → ARS
+                precio *= cotizacion;
+                costo *= cotizacion;
+            }
+
+            precioMap.set(item.idproducto, {
+                Precio: precio,
+                Costo: costo
+            });
+        });
+
+        // Armar respuesta final
         const resultados = stockData.map(prod => {
             let precio = null;
             let costo = null;
@@ -2516,22 +2681,19 @@ app.get("/api/stock", authenticateToken, async (req, res) => {
             } else {
                 const directo = precioMap.get(prod.idproducto);
                 if (directo) {
-                    if (directo.NroMonedaPrecio === 2) {
-                        precio = directo.Precio * cotizacion;
-                        costo = directo.Costo * cotizacion;
-                    } else {
-                        precio = directo.Precio;
-                        costo = directo.Costo;
-                    }
+                    precio = directo.Precio;
+                    costo = directo.Costo;
                 }
             }
 
             return {
                 codigo: prod.Codigo,
+                descripcion: prod.Descripcion,
                 precio: precio !== null ? Number(precio.toFixed(2)) : null,
                 costo: costo !== null ? Number(costo.toFixed(2)) : null,
                 fabricante: prod.Fabricante,
-                stock: Number(prod.Stock)
+                stock: Number(prod.Stock),
+                cotizacion: cotizacion
             };
         });
 
@@ -2543,296 +2705,294 @@ app.get("/api/stock", authenticateToken, async (req, res) => {
 });
 
 
-// app.get("/api/stock", authenticateToken, async (req, res) => {
-//     const fecha = (req.query.fecha);
-
-//     if (!fecha) {
-//         return res.status(400).json({ error: "El parámetro 'fecha' es requerido." });
-//     }
-
+// const enviarStockPorCorreo = async (data, fabricante, monedaBusqueda) => {
 //     try {
-//            // QUERY 0: PRECIOS DIRECTOS
-//         const query0 = `ROUND(productosprecios.Precio * (SELECT cotmoneda2 FROM monedacotizaciones ORDER BY fechahora DESC LIMIT 1), 2) AS 'Precio2'`;
+//         const workbook = new ExcelJS.Workbook();
+//         const worksheet = workbook.addWorksheet('Stock');
 
-//         const [dolar] = await pool.promise().query(query0);
+//         worksheet.pageSetup = {
+//             paperSize: 9, // A4
+//             orientation: 'portrait',
+//             fitToPage: true,
+//             fitToWidth: 1,
+//             fitToHeight: 0, // 🔧 que se ajuste en ancho y permita múltiples páginas
+//             horizontalCentered: true,
+//             verticalCentered: false,
+//             margins: {
+//                 left: 0.2,
+//                 right: 0.2,
+//                 top: 0.5,
+//                 bottom: 0.5,
+//                 header: 0.3,
+//                 footer: 0.3,
+//             },
+//         };
 
-//         // QUERY 1: STOCK
-//         const query1 = `
-//             SELECT 
-//                 SUM(CASE productosstockmovimientos.TIPO
-//                     WHEN 0 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
-//                     WHEN 1 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
-//                     WHEN 2 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
-//                     WHEN 3 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
-//                     ELSE 0 
-//                 END) AS Stock,
-//                 productos.Codigo,
-//                 productos.Fabricante,
-//                 productos.Armado,
-//                 productos.RecID AS idproducto
-//             FROM productos
-//             LEFT JOIN productosstock ON productosstock.idproducto = productos.RecID
-//             LEFT JOIN productosstockmovimientos ON productosstockmovimientos.idproducto = productos.RecID
-//             WHERE productosstockmovimientos.Fecha <= ?
-//                 AND (productosstock.controlastock = 1 
-//                     AND productosstockmovimientos.tipo <> 2
-//                     AND productosstockmovimientos.tipo <> 3 
-//                     OR productosstockmovimientos.tipo IS NULL)
-//                 AND productos.Inhabilitado = 0 
-//                 AND productos.Estado = 0
-//             GROUP BY productos.RecID
-//             HAVING Stock > 0
-//             ORDER BY productos.Fabricante ASC
-//         `;
+//         // Repetir la primera fila como encabezado en cada página impresa
+//         worksheet.pageSetup.printTitlesRow = '1:1';
 
-//         const [stockData] = await pool.promise().query(query1, [fecha]);
+//         // Definir columnas
+//         worksheet.columns = [
+//             { header: 'Código', key: 'codigo', width: 20 },
+//             { header: 'Descripción', key: 'descripcion', width: 30 }, // ancho fijo
+//             { header: 'Costo U', key: 'costo', width: 15 },
+//             { header: 'Subtotal Costo', key: 'subtotalCosto', width: 18 },
+//             { header: 'Precio U', key: 'precio', width: 15 },
+//             { header: 'Subtotal Precio', key: 'subtotalPrecio', width: 18 },
+//         ];
 
-//         // QUERY 2: PRECIOS ARMADOS
-//         const query2 = `
-//             SELECT 
-//                 SUM(productosinsumos.Cantidad * productosprecios.Precio) AS PrecioArmado,
-//                 SUM(productosinsumos.Cantidad * productosprecios.Costo) AS CostoArmado,
-//                 productos.RecID AS idproducto
-//             FROM productos
-//             LEFT JOIN productosinsumos ON productosinsumos.IDProducto = productos.RecID
-//             LEFT JOIN productosprecios ON productosprecios.IDProducto = productosinsumos.IDProductoInsumo
-//             WHERE productos.Inhabilitado = 0 AND productos.Estado = 0
-//             GROUP BY productos.RecID
-//         `;
-
-//         const [armadoData] = await pool.promise().query(query2);
-
-//         // QUERY 3: PRECIOS DIRECTOS
-//         const query3 = `
-//             SELECT 
-//                 productosprecios.Precio, productosprecios.Costo, productos.RecID AS idproducto
-//             FROM productos
-//             LEFT JOIN productosprecios ON productosprecios.IDProducto = productos.RecID
-//             WHERE productos.Inhabilitado = 0 AND productosprecios.Precio <> 0
-//         `;
-
-//         const [precioData] = await pool.promise().query(query3);
-
-      
-
-//         // Armar mapas para búsqueda rápida
-//         const armadoMap = new Map();
-//         armadoData.forEach(item => armadoMap.set(item.idproducto, item));
-
-//         const precioMap = new Map();
-//         precioData.forEach(item => precioMap.set(item.idproducto, item));
-
-//         // Construir resultado final
-//         const resultados = stockData.map(prod => {
-//             let precio = null;
-//             let costo = null;
-
-//             if (prod.Armado === 1) {
-//                 const armado = armadoMap.get(prod.idproducto);
-//                 if (armado) {
-//                     precio = armado.PrecioArmado;
-//                     costo = armado.CostoArmado;
-//                 }
-//             } else {
-//                 const directo = precioMap.get(prod.idproducto);
-//                 if (directo) {
-//                     precio = directo.Precio;
-//                     costo = directo.Costo;
-//                 }
-//             }
-
-//             return {
-//                 codigo: prod.Codigo,
-//                 precio: precio !== null ? Number(precio) : null,
-//                 costo: costo !== null ? Number(costo) : null,
-//                 fabricante: prod.Fabricante,
-//                 stock: Number(prod.Stock)
-//             };
+//         // Aplicar estilo negrita a headers
+//         worksheet.getRow(1).eachCell(cell => {
+//             cell.font = { bold: true };
+//             cell.alignment = { horizontal: 'center' }; // 👈 centrado horizontal
 //         });
 
-//         res.status(200).json(resultados);
-//     } catch (err) {
-//         console.error("❌ Error al ejecutar /api/stock:", err);
-//         res.status(500).json({ message: "Error interno del servidor" });
-//     }
-// });
+//         let totalCosto = 0;
+//         let totalPrecio = 0;
 
+//         // Agregar filas
+//         data.forEach(item => {
+//             const costo = item.costo || 0;
+//             const precio = item.precio || 0;
+//             const stock = item.stock || 0;
 
+//             const subtotalCosto = costo * stock;
+//             const subtotalPrecio = precio * stock;
 
-// app.get('/api/facturasmes', authenticateToken, (req, res) => {
-//     const idusuario = req.user.userId;
-//     const mes = parseInt(req.query.mes);
-//     const modulo1 = 1;
-//     const modulo2 = 2;
+//             totalCosto += subtotalCosto;
+//             totalPrecio += subtotalPrecio;
 
-//     const facturasQuery = `
-//         SELECT
-//             (
-//                 SELECT 
-//                     SUM( IF(
-//                         facturas.NroMoneda = 1, 
-//                         IF(facturas.Tipo = 0, 
-//                             IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), (facturas.SubTotal - facturas.ImporteDescuento)), 
-//                             IF(facturas.TipoMultitipo = 2, -(facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), -(facturas.SubTotal - facturas.ImporteDescuento))
-//                         ), 
-//                         IF(facturas.Tipo = 0, 
-//                             IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2, (facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2), 
-//                             IF(facturas.TipoMultitipo = 2, -((facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2), -((facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2))
-//                         )
-//                     )) 
-//                 FROM facturas
-//                 LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = facturas.IDCotizacionMoneda
-//                 WHERE facturas.Estado IN (0, 1, 5) AND MONTH(facturas.FechaCreacion) = ? AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE())
-//             ) AS suma_facturas,
-//             (
-//                 SELECT COUNT(*) 
-//                 FROM facturas
-//                 WHERE MONTH(facturas.FechaCreacion) = ?
-//                   AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE()) 
-//                   AND facturas.Estado IN (0, 1, 5)
-//             ) AS cantidad_facturas,
-//             (
-//                 SELECT valor 
-//                 FROM objetivomensual 
-//                 WHERE idusuario = ? AND modulo = ? AND mes = ?
-//             ) AS objetivo_facturas
-//     `;
-
-//     const pedidosQuery = `
-//         SELECT
-//             SUM(suma) AS suma_pedidos,
-//             SUM(cantidad) AS cantidad_pedidos,
-//             (
-//                 SELECT valor 
-//                 FROM objetivomensual 
-//                 WHERE idusuario = ? AND modulo = ? AND mes = ?
-//             ) AS objetivo_pedidos
-//         FROM resumen_pedidos 
-//         WHERE MONTH(creado_en) = ? AND YEAR(creado_en) = YEAR(CURDATE())
-//     `;
-
-//     const presupuestosQuery = `
-//         SELECT   
-//             IF (presupuestos.NroMoneda=1, presupuestos.SubTotal2, presupuestos.SubTotal2 * monedacotizaciones.CotMoneda2) AS subtotal,
-//             presupuestos.estado
-//         FROM presupuestos
-//         JOIN presupuestositems ON presupuestositems.IDPresupuesto = presupuestos.RecID
-//         JOIN contactos ON contactos.IDContacto = presupuestos.IDRef
-//         JOIN empresas ON empresas.IDEmpresa = contactos.IDEmpresa
-//         JOIN fiscal ON fiscal.IDRef = empresas.IDEmpresa AND fiscal.Defecto = 1
-//         JOIN usuarios ON usuarios.recid = presupuestos.IDUsuarioCreacion
-//         LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = presupuestositems.IDCotizacionMoneda
-//         WHERE MONTH(presupuestos.FechaCreacion) = ? 
-//           AND YEAR(presupuestos.FechaCreacion) = YEAR(CURDATE())
-//           AND presupuestos.Estado <> 2
-//         GROUP BY presupuestos.RecID
-//         ORDER BY presupuestos.FechaCreacion DESC
-//     `;
-
-//     const facturasParams = [mes, mes, idusuario, modulo1, mes];
-//     const pedidosParams = [idusuario, modulo2, mes, mes];
-//     const presupuestosParams = [mes];
-
-//     // Ejecutar las tres consultas en paralelo
-//     const facturasPromise = new Promise((resolve, reject) => {
-//         pool.query(facturasQuery, facturasParams, (err, results) => {
-//             if (err) return reject(err);
-//             resolve(results[0]);
-//         });
-//     });
-
-//     const pedidosPromise = new Promise((resolve, reject) => {
-//         pool.query(pedidosQuery, pedidosParams, (err, results) => {
-//             if (err) return reject(err);
-//             resolve(results[0]);
-//         });
-//     });
-
-//     const presupuestosPromise = new Promise((resolve, reject) => {
-//         pool.query(presupuestosQuery, presupuestosParams, (err, results) => {
-//             if (err) return reject(err);
-//             resolve(results);
-//         });
-//     });
-
-//     Promise.all([facturasPromise, pedidosPromise, presupuestosPromise])
-//         .then(([facturas, pedidos, presupuestos]) => {
-//             res.status(200).json({
-//                 facturas,
-//                 pedidos,
-//                 presupuestos
+//             worksheet.addRow({
+//                 codigo: item.codigo,
+//                 descripcion: item.descripcion,
+//                 costo,
+//                 subtotalCosto,
+//                 precio,
+//                 subtotalPrecio,
 //             });
-//         })
-//         .catch(err => {
-//             console.error('Error al ejecutar una de las consultas:', err);
-//             res.status(500).json({ message: 'Error interno del servidor' });
 //         });
-// });
 
-// app.get('/api/facturasmes', authenticateToken, (req, res) => {
-//     const idusuario = req.user.userId;
-//     const mes = parseInt(req.query.mes); 
-//     const modulo = 1
+//         // Aplicar formato moneda a las columnas de precios
+//         const monedaCols = ['C', 'D', 'E', 'F']; // columnas con montos
+//         const rowCount = worksheet.rowCount;
+//         monedaCols.forEach(col => {
+//             for (let i = 2; i <= rowCount; i++) {
+//                 worksheet.getCell(`${col}${i}`).numFmt = '"$"#,##0.00';
+//             }
+//         });
 
-//     const query = `
-//         SELECT
-//         (
-//             SELECT 
-//                 SUM( IF(
-//                     facturas.NroMoneda = 1, 
-//                     IF(facturas.Tipo = 0, 
-//                         IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), (facturas.SubTotal - facturas.ImporteDescuento)), 
-//                         IF(facturas.TipoMultitipo = 2, -(facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), -(facturas.SubTotal - facturas.ImporteDescuento))
-//                     ), 
-//                     IF(facturas.Tipo = 0, 
-//                         IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2, (facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2), 
-//                         IF(facturas.TipoMultitipo = 2, -((facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2), -((facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2))
-//                     )
-//                 )) AS suma      
-//             FROM facturas
-//             JOIN fiscal ON fiscal.RecID = facturas.IDFiscal
-//             JOIN usuarios ON usuarios.RecID = facturas.IDUsuario
-//             JOIN talonarios ON talonarios.RecID = facturas.IDTalonario
-//             LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = facturas.IDCotizacionMoneda
-//             WHERE facturas.Estado IN (0, 1, 5) AND MONTH(facturas.FechaCreacion) = ? AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE())
-//         ) AS suma,         
+//         // Insertar fila de totales generales
+//         const totalRow = worksheet.addRow({
+//             descripcion: 'TOTAL GENERAL:',
+//             subtotalCosto: totalCosto,
+//             subtotalPrecio: totalPrecio,
+//         });
 
-//         (
-//             SELECT COUNT(*) 
-//             FROM facturas
-//             WHERE MONTH(facturas.FechaCreacion) = ?
-//               AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE()) 
-//               AND facturas.Estado IN (0, 1, 5)
-//         ) AS cantidad,
+//         totalRow.getCell('B').font = { bold: true };
+//         totalRow.getCell('D').font = { bold: true };
+//         totalRow.getCell('F').font = { bold: true };
+//         totalRow.getCell('D').numFmt = '"$"#,##0.00';
+//         totalRow.getCell('F').numFmt = '"$"#,##0.00';
 
-//         (
-//             SELECT valor 
-//             FROM objetivomensual 
-//             WHERE idusuario = ? AND modulo = ? AND mes = ?
-//         ) AS objetivo_mensual
+//         // Guardar Excel
+//         const excelPath = path.join(__dirname, 'stock.xlsx');
+//         await workbook.xlsx.writeFile(excelPath);
 
-//         FROM facturas
-//         JOIN fiscal ON fiscal.RecID = facturas.IDFiscal
-//         WHERE MONTH(facturas.FechaCreacion) = ?
-//           AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE())
-//           AND facturas.Estado IN (0, 1, 5)
-//         ORDER BY facturas.Total DESC
-//         LIMIT 1;
-//     `;
+//         // Enviar correo
+//         const transporter = nodemailer.createTransport({
+//             host: 'vxct8007.avnam.net',
+//             port: 587,
+//             secure: false,
+//             auth: {
+//                 user: 'noreply@distritec.com.ar',
+//                 pass: 'RT58i.j@2T49!',
+//             },
+//             tls: { rejectUnauthorized: false }
+//         });
 
-//     // Parámetros en el mismo orden que los signos de ?
-//     const params = [mes, mes, idusuario, modulo, mes, mes];
+//         const hoy = new Date();
+//         const dia = String(hoy.getDate()).padStart(2, '0');
+//         const mes = String(hoy.getMonth() + 1).padStart(2, '0');
+//         const anio = hoy.getFullYear();
 
-//     pool.query(query, params, (err, results) => {
-//         if (err) {
-//             console.error('Error al ejecutar la consulta:', err);
-//             return res.status(500).json({ message: 'Error interno del servidor' });
-//         }
-//         res.status(200).json(results[0]);
-//     });
-// });
+//         const fechaFormateada = `${dia}-${mes}-${anio}`;
+//         const nombreArchivo = `Stock_${fabricante}_${fechaFormateada}.xlsx`;
 
 
+//         await transporter.sendMail({
+//             from: '"Sistema de Stock" <noreply@distritec.com.ar>',
+//             to: "pichu662@gmail.com",
+//             subject: 'Reporte de Stock',
+//             text: `Adjunto encontrarás el reporte de stock`,
+//             attachments: [
+//                 {
+//                     filename: nombreArchivo,
+//                     path: excelPath
+//                 }
+//             ]
+//         });
+
+//         fs.unlinkSync(excelPath);
+//         console.log('Correo enviado con éxito');
+//     } catch (err) {
+//         console.error('Error al enviar correo:', err);
+//         throw err;
+//     }
+// };
+const enviarStockPorCorreo = async (data, fabricante, monedaBusqueda) => {
+    try {
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Stock');
+
+        worksheet.pageSetup = {
+            paperSize: 9, // A4
+            orientation: 'portrait',
+            fitToPage: true,
+            fitToWidth: 1,
+            fitToHeight: 0, // 🔧 que se ajuste en ancho y permita múltiples páginas
+            horizontalCentered: true,
+            verticalCentered: false,
+            margins: {
+                left: 0.2,
+                right: 0.2,
+                top: 0.5,
+                bottom: 0.5,
+                header: 0.3,
+                footer: 0.3,
+            },
+        };
+
+        // Repetir la primera fila como encabezado en cada página impresa
+        worksheet.pageSetup.printTitlesRow = '1:1';
+
+        // Definir columnas
+        worksheet.columns = [
+            { header: 'Código', key: 'codigo', width: 20 },
+            { header: 'Descripción', key: 'descripcion', width: 30 }, // ancho fijo
+            { header: 'Costo U', key: 'costo', width: 15 },
+            { header: 'Subtotal Costo', key: 'subtotalCosto', width: 18 },
+            { header: 'Precio U', key: 'precio', width: 15 },
+            { header: 'Subtotal Precio', key: 'subtotalPrecio', width: 18 },
+        ];
+
+        // Aplicar estilo negrita a headers
+        worksheet.getRow(1).eachCell(cell => {
+            cell.font = { bold: true };
+            cell.alignment = { horizontal: 'center' }; // 👈 centrado horizontal
+        });
+
+        let totalCosto = 0;
+        let totalPrecio = 0;
+
+        // Agregar filas
+        data.forEach(item => {
+            const costo = item.costo || 0;
+            const precio = item.precio || 0;
+            const stock = item.stock || 0;
+
+            const subtotalCosto = costo * stock;
+            const subtotalPrecio = precio * stock;
+
+            totalCosto += subtotalCosto;
+            totalPrecio += subtotalPrecio;
+
+            worksheet.addRow({
+                codigo: item.codigo,
+                descripcion: item.descripcion,
+                costo,
+                subtotalCosto,
+                precio,
+                subtotalPrecio,
+            });
+        });
+
+        // Aplicar formato moneda a las columnas de precios
+        const monedaCols = ['C', 'D', 'E', 'F']; // columnas con montos
+        const rowCount = worksheet.rowCount;
+        const formatoMoneda = monedaBusqueda === 1 ? '"$"#,##0.00' : '"USD"#,##0.00';
+
+        // Aplicar formato a columnas C, D, E, F
+        monedaCols.forEach(col => {
+            for (let i = 2; i <= rowCount; i++) {
+                worksheet.getCell(`${col}${i}`).numFmt = formatoMoneda;
+            }
+        });
+
+        // Totales también
+
+
+        // Insertar fila de totales generales
+        const totalRow = worksheet.addRow({
+            descripcion: 'TOTAL GENERAL:',
+            subtotalCosto: totalCosto,
+            subtotalPrecio: totalPrecio,
+        });
+
+        totalRow.getCell('B').font = { bold: true };
+        totalRow.getCell('D').font = { bold: true };
+        totalRow.getCell('F').font = { bold: true };
+        totalRow.getCell('D').numFmt = formatoMoneda;
+        totalRow.getCell('F').numFmt = formatoMoneda; 
+
+        // Guardar Excel
+        const excelPath = path.join(__dirname, 'stock.xlsx');
+        await workbook.xlsx.writeFile(excelPath);
+
+        // Enviar correo
+        const transporter = nodemailer.createTransport({
+            host: 'vxct8007.avnam.net',
+            port: 587,
+            secure: false,
+            auth: {
+                user: 'noreply@distritec.com.ar',
+                pass: 'RT58i.j@2T49!',
+            },
+            tls: { rejectUnauthorized: false }
+        });
+
+        const hoy = new Date();
+        const dia = String(hoy.getDate()).padStart(2, '0');
+        const mes = String(hoy.getMonth() + 1).padStart(2, '0');
+        const anio = hoy.getFullYear();
+
+        const tipomoneda = (monedaBusqueda === 1 ? "ARS" : "USD")
+        const fechaFormateada = `${dia}-${mes}-${anio}`;
+        const nombreArchivo = `Stock_${fabricante}_${fechaFormateada}_${tipomoneda}.xlsx`;
+
+        await transporter.sendMail({
+            from: '"Sistema de Stock" <noreply@distritec.com.ar>',
+            to: "jrivas@distritec.com.ar",
+            subject: 'Reporte de Stock',
+            text: `Adjunto encontrarás el reporte de stock`,
+            attachments: [
+                {
+                    filename: nombreArchivo,
+                    path: excelPath
+                }
+            ]
+        });
+
+        fs.unlinkSync(excelPath);
+        console.log('Correo enviado con éxito');
+    } catch (err) {
+        console.error('Error al enviar correo:', err);
+        throw err;
+    }
+};
+
+app.post('/api/enviarstock', async (req, res) => {
+
+    try {
+        const { data, fabricante, monedaBusqueda } = req.body;
+
+        await enviarStockPorCorreo(data, fabricante, monedaBusqueda);
+        res.status(200).json({ message: 'Correo enviado correctamente' });
+
+    } catch (error) {
+        console.error('Error en endpoint:', error);
+        res.status(500).json({ error: 'Error al enviar el correo' });
+    }
+});
 
 
 
@@ -3009,7 +3169,7 @@ cron.schedule('0 0 * * *', () => {
 
 
 // Configuración del servidor
-const PORT = 7000;
+const PORT = 7250;
 app.listen(PORT, () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
 
 
