@@ -2963,7 +2963,7 @@ const enviarStockPorCorreo = async (data, fabricante, monedaBusqueda) => {
 
         await transporter.sendMail({
             from: '"Sistema de Stock" <noreply@distritec.com.ar>',
-            to: "pichu662@gmail.com",
+            to: "jrivas@distritec.com.ar",
             subject: 'Reporte de Stock',
             text: `Adjunto encontrarás el reporte de stock`,
             attachments: [
