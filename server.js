@@ -2869,6 +2869,7 @@ const enviarStockPorCorreo = async (data, fabricante, monedaBusqueda) => {
         worksheet.columns = [
             { header: 'Código', key: 'codigo', width: 20 },
             { header: 'Descripción', key: 'descripcion', width: 30 }, // ancho fijo
+            { header: 'Cant', key: 'stock', width: 6 }, // ancho fijo
             { header: 'Costo U', key: 'costo', width: 15 },
             { header: 'Subtotal Costo', key: 'subtotalCosto', width: 18 },
             { header: 'Precio U', key: 'precio', width: 15 },
@@ -2899,6 +2900,7 @@ const enviarStockPorCorreo = async (data, fabricante, monedaBusqueda) => {
             worksheet.addRow({
                 codigo: item.codigo,
                 descripcion: item.descripcion,
+                stock: item.stock,
                 costo,
                 subtotalCosto,
                 precio,
@@ -2907,7 +2909,7 @@ const enviarStockPorCorreo = async (data, fabricante, monedaBusqueda) => {
         });
 
         // Aplicar formato moneda a las columnas de precios
-        const monedaCols = ['C', 'D', 'E', 'F']; // columnas con montos
+        const monedaCols = ['D', 'E', 'F', 'G']; // columnas con montos
         const rowCount = worksheet.rowCount;
         const formatoMoneda = monedaBusqueda === 1 ? '"$"#,##0.00' : '"USD"#,##0.00';
 
@@ -2929,10 +2931,10 @@ const enviarStockPorCorreo = async (data, fabricante, monedaBusqueda) => {
         });
 
         totalRow.getCell('B').font = { bold: true };
-        totalRow.getCell('D').font = { bold: true };
-        totalRow.getCell('F').font = { bold: true };
-        totalRow.getCell('D').numFmt = formatoMoneda;
-        totalRow.getCell('F').numFmt = formatoMoneda; 
+        totalRow.getCell('E').font = { bold: true };
+        totalRow.getCell('G').font = { bold: true };
+        totalRow.getCell('E').numFmt = formatoMoneda;
+        totalRow.getCell('G').numFmt = formatoMoneda;
 
         // Guardar Excel
         const excelPath = path.join(__dirname, 'stock.xlsx');
@@ -2961,7 +2963,7 @@ const enviarStockPorCorreo = async (data, fabricante, monedaBusqueda) => {
 
         await transporter.sendMail({
             from: '"Sistema de Stock" <noreply@distritec.com.ar>',
-            to: "jrivas@distritec.com.ar",
+            to: "pichu662@gmail.com",
             subject: 'Reporte de Stock',
             text: `Adjunto encontrarás el reporte de stock`,
             attachments: [
