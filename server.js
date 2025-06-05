@@ -2011,7 +2011,7 @@ FROM (
         WHERE 
             facturasitems.Codigo = ? AND 
             DATE(facturas.FechaCreacion) BETWEEN ? AND ? AND
-            facturas.Estado IN (0, 1, 5)
+            facturas.Estado IN (0, 1)
 
         GROUP BY 
             facturas.recid,
