@@ -2996,12 +2996,68 @@ app.post('/api/enviarstock', async (req, res) => {
     }
 });
 
+app.get('/api/ComprobarStock', async (req, res) => {
+    const codigo = req.query.codigo;
+
+    const queryStock = `
+        SELECT * FROM 
+        (SELECT 
+            SUM(CASE productosstockmovimientos.TIPO
+                WHEN 0 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+                WHEN 1 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+                WHEN 2 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+                WHEN 3 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia) 
+                ELSE 0 
+            END) AS 'Stock', 
+            productos.recid, productos.descripcion, productos.codigo, productos.descripcion3
+        FROM 
+            productos
+        LEFT JOIN 
+            productosstock ON productosstock.idproducto = productos.recid
+        LEFT JOIN 
+            productosstockmovimientos ON productosstockmovimientos.idproducto = productos.recid
+        WHERE productos.codigo = ? AND
+            (productosstock.controlastock = 1 
+            AND productosstockmovimientos.tipo <> 2
+            AND productosstockmovimientos.tipo <> 3 
+            OR productosstockmovimientos.tipo IS NULL)
+        GROUP BY productos.recid) AS A
+        LEFT JOIN
+        (SELECT 
+            SUM(CAST(pedidositems.escenario AS DECIMAL)) AS total_pedido, 
+            pedidositems.IDProducto
+        FROM pedidositems
+        WHERE pedidositems.Codigo = ? AND pedidositems.Estado = 0
+        GROUP BY pedidositems.IDProducto) AS B
+        ON A.recid = B.IDProducto
+    `;
+
+    const queryOtra = `
+       SELECT pedidos.Numero, pedidos.FechaCreacion, fiscal.RazonSocial, pedidositems.escenario  
+FROM pedidositems
+JOIN pedidos ON pedidos.RecID=pedidositems.IDPedido
+JOIN fiscal ON fiscal.RecID=pedidos.IDFiscal
+WHERE pedidositems.codigo= ? AND pedidositems.Escenario <>''
+AND pedidositems.Estado = 0
+    `;
+
+    try {
+        const [stock] = await pool.promise().query(queryStock, [codigo, codigo]);
+        const [movimientos] = await pool.promise().query(queryOtra, [codigo]);
+
+
+        res.json({
+            stock: stock[0] ?? {},         // devuelve objeto plano
+            movimientos: movimientos ?? [] // devuelve array de objetos
+        });
+    } catch (err) {
+        console.error('Error en consultas:', err);
+        res.status(500).json({ message: 'Error interno del servidor' });
+    }
+});
 
 
 
-
-
-// Array para almacenar los tokens (en una base de datos real, deberías usar una base de datos)
 let expoPushTokens = [];
 
 // Endpoint para guardar el token
@@ -3150,6 +3206,7 @@ async function checkAndNotifyForAllUsers() {
     });
 }
 
+
 // Restablecer el campo notificacion_enviada todos los días a la medianoche
 cron.schedule('0 0 * * *', () => {
     console.log('Restableciendo la notificación enviada a todos los usuarios...');
@@ -3163,10 +3220,6 @@ cron.schedule('0 0 * * *', () => {
     });
 });
 
-
-// setInterval(() => {
-//     checkAndNotifyForAllUsers();
-// }, 60000); // Intervalo de 10 minutos
 
 
 
