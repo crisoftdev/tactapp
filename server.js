@@ -2143,7 +2143,7 @@ FROM (
     JOIN monedacotizaciones ON monedacotizaciones.RecID = requerimientositems.IDCotizacionMoneda
     WHERE
        MONTH(requerimientos.FechaCreacion) = ?
-      AND YEAR(requerimientos.FechaCreacion) = YEAR(CURDATE())
+      AND YEAR(requerimientos.FechaCreacion) = YEAR(CURDATE()) AND requerimientos.estado<>2
 ) AS subquery;
     `;
 
