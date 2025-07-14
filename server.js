@@ -2168,7 +2168,7 @@ FROM (
     JOIN requerimientositems ON requerimientositems.IDRequerimiento = requerimientos.recid
     JOIN fiscal ON fiscal.recid = requerimientos.IDFiscal
     JOIN monedacotizaciones ON monedacotizaciones.RecID = requerimientositems.IDCotizacionMoneda
-    WHERE fiscal.RazonSocial = 'AUTOMAC.MICROMECANICA S.A.I.C.'
+    WHERE fiscal.RazonSocial = 'AUTOMAC.MICROMECANICA S.A.I.C.' AND requerimientos.estado<>2
       AND MONTH(requerimientos.FechaCreacion) = ?
       AND YEAR(requerimientos.FechaCreacion) = YEAR(CURDATE())
 ) AS subquery;
