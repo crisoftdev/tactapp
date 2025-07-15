@@ -3142,7 +3142,7 @@ app.get('/api/buscarPedidoWhatsapp', async (req, res) => {
         SELECT 
             pedidos.Numero, 
             pedidos.FechaCreacion, 
-            pedidos.Total
+            pedidos.Total, pedidos.Escenario
         FROM pedidos
         WHERE pedidos.Estado = 0 AND pedidos.IDFiscal = UNHEX(?)
     `;
