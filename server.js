@@ -3037,7 +3037,6 @@ app.get('/api/ComprobarStock', async (req, res) => {
           productos.codigo LIKE ?   
           AND productos.Inhabilitado = 0 
           AND productos.estado = 0 
-          AND productos.Fabricante <> 'GRUPO TORNADO S.A.'
         GROUP BY 
           productos.recid) AS A
       LEFT JOIN 
