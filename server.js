@@ -3000,55 +3000,114 @@ app.get('/api/ComprobarStock', async (req, res) => {
     const codigo = req.query.codigo;
 
     const queryStock = `
-        SELECT * FROM 
+        SELECT 
+        a.Codigo, 
+        a.Descripcion, 
+        ROUND(IF(a.fabricante = 'YUKEN KOGYO CO.,LTD.', b.Precio, 
+        (IFNULL(a.PrecioArmado, b.Precio))), 2) AS 'Precio', 
+        a.Recid,  
+        IF(a.codtransporte = '', 'sin', CONCAT('https://portal-distritec.com.ar/', a.codtransporte)) AS catalogo, 
+        b.NroMonedaPrecio, 
+        c.Stock AS Stock_Gral, 
+        d.total_pedido, 
+        IFNULL((c.Stock - d.total_pedido),0) AS Stock, a.CodigoFabricante
+      FROM 
         (SELECT 
-            SUM(CASE productosstockmovimientos.TIPO
-                WHEN 0 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
-                WHEN 1 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
-                WHEN 2 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
-                WHEN 3 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia) 
-                ELSE 0 
-            END) AS 'Stock', 
-            productos.recid, productos.descripcion, productos.codigo, productos.descripcion3
+          productos.Codigo, 
+          productos.Descripcion, 
+          SUM(productosinsumos.Cantidad * productosprecios.Precio) AS 'PrecioArmado', 
+          productos.Recid, 
+          productos.TipoProducto, 
+          productos.Fabricante, 
+          productosprecios.NroLista,
+          ROUND(productosprecios.Precio * (SELECT cotmoneda2 FROM monedacotizaciones ORDER BY fechahora DESC LIMIT 1), 2) AS 'Precio2', 
+          productos.CodigoFabricante, 
+          productos.Nombre, 
+          productos.codtransporte, 
+          productos.descripcion3
         FROM 
-            productos
+          productos
         LEFT JOIN 
-            productosstock ON productosstock.idproducto = productos.recid
+          productosinsumos 
+          ON productosinsumos.IDProducto = productos.RecID
         LEFT JOIN 
-            productosstockmovimientos ON productosstockmovimientos.idproducto = productos.recid
-        WHERE productos.codigo = ? AND
-            (productosstock.controlastock = 1 
-            AND productosstockmovimientos.tipo <> 2
-            AND productosstockmovimientos.tipo <> 3 
-            OR productosstockmovimientos.tipo IS NULL)
-        GROUP BY productos.recid) AS A
-        LEFT JOIN
+          productosprecios 
+          ON productosprecios.IDProducto = productosinsumos.IDProductoInsumo
+        WHERE 
+          productos.codigo LIKE ?   
+          AND productos.Inhabilitado = 0 
+          AND productos.estado = 0 
+          AND productos.Fabricante <> 'GRUPO TORNADO S.A.'
+        GROUP BY 
+          productos.recid) AS A
+      LEFT JOIN 
         (SELECT 
-            SUM(CAST(pedidositems.escenario AS DECIMAL)) AS total_pedido, 
-            pedidositems.IDProducto
-        FROM pedidositems
-        WHERE pedidositems.Codigo = ? AND pedidositems.Estado = 0
-        GROUP BY pedidositems.IDProducto) AS B
-        ON A.recid = B.IDProducto
-    `;
-
-    const queryOtra = `
-       SELECT pedidos.Numero, pedidos.FechaCreacion, fiscal.RazonSocial, pedidositems.escenario  
-FROM pedidositems
-JOIN pedidos ON pedidos.RecID=pedidositems.IDPedido
-JOIN fiscal ON fiscal.RecID=pedidos.IDFiscal
-WHERE pedidositems.codigo= ? AND pedidositems.Escenario <>''
-AND pedidositems.Estado = 0
+          productosprecios.Precio AS 'Precio', 
+          productos.Recid, 
+          productosprecios.NroMonedaPrecio
+        FROM 
+          productos
+        LEFT JOIN 
+          productosprecios 
+          ON productosprecios.IDProducto = productos.RecID
+        WHERE  
+          productos.codigo LIKE ? 
+          AND productos.Inhabilitado = 0  
+          AND productosprecios.Precio <> 0 
+        ORDER BY 
+          productos.Codigo DESC) AS B
+      ON 
+        A.RECID = B.RECID
+      LEFT JOIN
+        (SELECT 
+          SUM(CASE productosstockmovimientos.TIPO
+            WHEN 0 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+            WHEN 1 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+            WHEN 2 THEN -(productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia)
+            WHEN 3 THEN (productosstockmovimientos.cantidad * productosstockmovimientos.Equivalencia) 
+            ELSE 0 
+          END) AS 'Stock', 
+          productos.recid
+        FROM 
+          productos
+        LEFT JOIN 
+          productosstock 
+          ON (productosstock.idproducto = productos.recid)
+        LEFT JOIN 
+          productosstockmovimientos 
+          ON (productosstockmovimientos.idproducto = productos.recid)
+        WHERE productos.codigo LIKE ? AND
+          (productosstock.controlastock = 1 
+          AND productosstockmovimientos.tipo <> 2
+          AND productosstockmovimientos.tipo <> 3 
+          OR productosstockmovimientos.tipo IS NULL)
+        GROUP BY 
+          productos.recid) AS C
+      ON 
+        A.RECID = C.RECID
+      LEFT JOIN
+        (SELECT 
+          SUM(CAST(pedidositems.escenario AS DECIMAL)) AS total_pedido, 
+          pedidositems.IDProducto
+        FROM 
+          pedidositems
+        WHERE pedidositems.Codigo LIKE ? AND
+          pedidositems.Estado = 0
+        GROUP BY 
+          pedidositems.IDProducto) AS D
+      ON 
+        A.RECID = D.IDProducto
+      GROUP BY 
+        a.recid
     `;
 
     try {
-        const [stock] = await pool.promise().query(queryStock, [codigo, codigo]);
-        const [movimientos] = await pool.promise().query(queryOtra, [codigo]);
-
+        const [stock] = await pool.promise().query(queryStock, [codigo, codigo, codigo, codigo]);
+       
 
         res.json({
             stock: stock[0] ?? {},         // devuelve objeto plano
-            movimientos: movimientos ?? [] // devuelve array de objetos
+        
         });
     } catch (err) {
         console.error('Error en consultas:', err);
