@@ -3102,17 +3102,63 @@ app.get('/api/ComprobarStock', async (req, res) => {
 
     try {
         const [stock] = await pool.promise().query(queryStock, [codigo, codigo, codigo, codigo]);
-       
+
 
         res.json({
             stock: stock[0] ?? {},         // devuelve objeto plano
-        
+
         });
     } catch (err) {
         console.error('Error en consultas:', err);
         res.status(500).json({ message: 'Error interno del servidor' });
     }
 });
+
+app.get('/api/buscarClienteWhatsapp', async (req, res) => {
+    const param = req.query.param;
+
+    const queryStock = `
+        SELECT HEX(empresas.recid) AS empresa_recid,  
+               HEX(fiscal.recid) AS fiscal_recid, 
+               empresas.Empresa, 
+               fiscal.NroImpuesto1
+        FROM empresas
+        JOIN fiscal ON fiscal.IDRef = empresas.IDEmpresa 
+        WHERE empresas.Empresa LIKE ?
+    `;
+
+    try {
+        const [clientes] = await pool.promise().query(queryStock, [`%${param}%`]);
+        res.json({ clientes });
+    } catch (err) {
+        console.error('Error en consultas:', err);
+        res.status(500).json({ message: 'Error interno del servidor' });
+    }
+});
+app.get('/api/buscarPedidoWhatsapp', async (req, res) => {
+    const idfiscal = req.query.idfiscal;
+
+    const query = `
+        SELECT 
+            pedidos.Numero, 
+            pedidos.FechaCreacion, 
+            pedidos.Total
+        FROM pedidos
+        WHERE pedidos.Estado = 0 AND pedidos.IDFiscal = UNHEX(?)
+    `;
+
+    try {
+        const [pedidos] = await pool.promise().query(query, [idfiscal]);
+        res.json({ pedidos });
+    } catch (err) {
+        console.error('Error en consulta de pedidos:', err);
+        res.status(500).json({ message: 'Error interno del servidor' });
+    }
+});
+
+
+
+
 
 
 
