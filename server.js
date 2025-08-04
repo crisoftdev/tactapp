@@ -95,7 +95,8 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(401).json({ message: 'Contraseña incorrecta' });
         }
 
-        const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '60d' });
+        const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET);
+
         res.status(200).json({ message: 'Inicio de sesión exitoso', token });
     } catch (error) {
         console.error(error);
@@ -3155,12 +3156,6 @@ app.get('/api/buscarPedidoWhatsapp', async (req, res) => {
         res.status(500).json({ message: 'Error interno del servidor' });
     }
 });
-
-
-
-
-
-
 
 let expoPushTokens = [];
 
