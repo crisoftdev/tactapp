@@ -1193,6 +1193,59 @@ app.get('/api/busquedaFacturasChart', authenticateToken, (req, res) => {
         values.push(fechaHasta);
     }
 
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")} AND fi.Estado IN (0,1,5)
+AND fa.Estado IN (0,1,5)` : "";
+
+    const query = `
+    SELECT 
+  fi.Fabricante AS RazonSocial,
+  CASE 
+    WHEN fa.Tipo = 1 THEN 
+      -1 * ((fi.ImportePrecio1) * (1 - (fi.Descuento / 100))) * (1 - (fa.Descuento / 100))
+    ELSE 
+      ((fi.ImportePrecio1) * (1 - (fi.Descuento / 100))) * (1 - (fa.Descuento / 100))
+  END AS SubTotal
+FROM facturasitems AS fi
+JOIN facturas AS fa ON fa.RecID = fi.IDFactura
+JOIN fiscal ON fiscal.RecID=fa.IDFiscal
+        ${whereClause}
+       
+    `;
+
+    // Armamos de nuevo los valores para la subconsulta B también
+    const allValues = [...values];
+    if (fechaDesde) allValues.push(fechaDesde);
+    if (fechaHasta) allValues.push(fechaHasta);
+
+    pool.query(query, allValues, (err, results) => {
+
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor', error: err.sqlMessage });
+        }
+        res.status(200).json(results);
+    });
+});
+
+app.get('/api/busquedaFacturasChartBACK', authenticateToken, (req, res) => {
+    const { empresa, fechaDesde, fechaHasta } = req.query;
+
+    const conditions = [];
+    const values = [];
+
+    if (empresa) {
+        conditions.push("fiscal.RazonSocial LIKE ?");
+        values.push(`%${empresa}%`);
+    }
+    if (fechaDesde) {
+        conditions.push("DATE(fi.FechaEmision) >= ?");
+        values.push(fechaDesde);
+    }
+    if (fechaHasta) {
+        conditions.push("DATE(fi.FechaEmision) <= ?");
+        values.push(fechaHasta);
+    }
+
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
     const query = `
