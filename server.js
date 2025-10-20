@@ -1078,13 +1078,20 @@ app.get('/api/busquedaPresupuestos', authenticateToken, (req, res) => {
 });
 app.get('/api/busquedaFacturas', authenticateToken, (req, res) => {
     const { empresa, fechaDesde, fechaHasta } = req.query;
+    let hexEmpresa = ""
+    if (empresa) {
+        // Convertir el texto a bytes y mostrar en hexadecimal
+        hexEmpresa = Buffer.from(empresa, 'utf8').toString('hex').toUpperCase();
+        console.log("EMPRESA BUSCADA:", empresa);
+        console.log("HEX:", hexEmpresa);
+    }
 
     const conditions = [];
     const values = [];
 
     if (empresa) {
-        conditions.push("fiscal.RazonSocial LIKE ?");
-        values.push(`%${empresa}%`);
+        conditions.push("fiscal.RazonSocial =CONVERT(UNHEX(?) USING utf8)");
+        values.push(`${hexEmpresa}`);
     }
     if (fechaDesde) {
         conditions.push("DATE(facturas.FechaCreacion) >= ?");
@@ -1393,6 +1400,7 @@ SELECT a.factura as 'Factura',
 });
 app.get("/api/buscarEmpresas", authenticateToken, async (req, res) => {
     const { search } = req.query;
+    console.log("SEARCH:", search)
 
     if (!search) {
         return res.status(400).json({ error: "El parámetro 'search' es requerido." });
