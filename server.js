@@ -541,36 +541,58 @@ app.get('/api/facturashoy', authenticateToken, (req, res) => {
 });
 app.get('/api/facturasDetallehoy', authenticateToken, (req, res) => {
     const query = `
-        SELECT 
+       SELECT 
     (SELECT COUNT(*) 
      FROM facturas 
      WHERE DATE(facturas.FechaCreacion) = CURDATE() 
        AND facturas.Estado IN (0, 1, 5)) AS cantidad, 
-    (SELECT SUM(
-        CASE  
-            WHEN f.tipo = 0 THEN f.Subtotal
-            WHEN f.tipo = 1 THEN -f.Subtotal
-            ELSE 0 
-        END)
-     FROM facturas f
-     WHERE DATE(f.FechaCreacion) = CURDATE() 
-       AND f.Estado IN (0, 1, 5)) AS suma_total, -- Subconsulta para sumar los subtotales
+       
+   (SELECT SUM(
+        IF(
+            f.NroMoneda = 1, 
+            IF(f.Tipo = 0, 
+                IF(f.TipoMultitipo = 2, (f.SubTotal - f.ImporteDescuento - f.Impuesto), (f.SubTotal - f.ImporteDescuento)), 
+                IF(f.TipoMultitipo = 2, -(f.SubTotal - f.ImporteDescuento - f.Impuesto), -(f.SubTotal - f.ImporteDescuento))
+            ), 
+            IF(f.Tipo = 0, 
+                IF(f.TipoMultitipo = 2, (f.SubTotal - f.ImporteDescuento - f.Impuesto) * m.CotMoneda2, (f.SubTotal - f.ImporteDescuento) * m.CotMoneda2), 
+                IF(f.TipoMultitipo = 2, -((f.SubTotal - f.ImporteDescuento - f.Impuesto) * m.CotMoneda2), -((f.SubTotal - f.ImporteDescuento) * m.CotMoneda2))
+            )
+        )
+    )
+ FROM facturas f
+ LEFT JOIN monedacotizaciones m ON m.RecID = f.IDCotizacionMoneda
+ WHERE DATE(f.FechaCreacion) = CURDATE()
+   AND f.Estado IN (0,1,5)
+) AS suma_total,
+
+       
+                   IF(
+                facturas.NroMoneda = 1, 
+                IF(facturas.Tipo = 0, 
+                    IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), (facturas.SubTotal - facturas.ImporteDescuento)), 
+                    IF(facturas.TipoMultitipo = 2, -(facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), -(facturas.SubTotal - facturas.ImporteDescuento))
+                ), 
+                IF(facturas.Tipo = 0, 
+                    IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2, (facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2), 
+                    IF(facturas.TipoMultitipo = 2, -((facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2), -((facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2))
+                )
+            ) AS fact,
         
     fiscal.RazonSocial, 
     usuarios.Usuario, 
     CAST(TIME(facturas.fechacreacion) AS CHAR) AS Hora, 
     facturas.nromoneda, 
     facturas.id, 
-    CONCAT(CAST(LPAD(talonarios.NroSucursal,4,0) AS CHAR), '-', CAST(LPAD(facturas.Numero,8,0) AS CHAR)) AS Numero,
-    CASE  
-        WHEN facturas.tipo = 0 THEN facturas.Total
-        WHEN facturas.tipo = 1 THEN -facturas.Total
-        ELSE 0 
-    END AS fact
+    CONCAT(CAST(LPAD(talonarios.NroSucursal,4,0) AS CHAR), '-', CAST(LPAD(facturas.Numero,8,0) AS CHAR)) AS Numero
+    
+        
+    
 FROM facturas
 JOIN fiscal ON fiscal.RecID = facturas.IDFiscal
 JOIN usuarios ON usuarios.recid = facturas.IDUsuario
 JOIN talonarios ON talonarios.RecID = facturas.IDTalonario
+LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = facturas.IDCotizacionMoneda
 WHERE DATE(facturas.FechaCreacion) = CURDATE() 
   AND facturas.Estado IN (0, 1, 5)
 GROUP BY 
@@ -945,8 +967,9 @@ app.get('/api/busquedaRequerimientos', authenticateToken, (req, res) => {
             fiscal.RazonSocial, 
             requerimientos.Total AS Total2,
             if (requerimientos.NroMoneda=1,requerimientos.total,requerimientos.Total* monedacotizaciones.CotMoneda2) AS Total,
-             if (requerimientos.NroMoneda=1,requerimientos.SubTotal,requerimientos.SubTotal* monedacotizaciones.CotMoneda2) AS SubTotal,
-              if (requerimientos.NroMoneda=1,requerimientos.SubTotal2,requerimientos.SubTotal2* monedacotizaciones.CotMoneda2) AS SubTotal2,
+            if (requerimientos.NroMoneda=1,requerimientos.SubTotal,requerimientos.SubTotal* monedacotizaciones.CotMoneda2) AS SubTotal,
+            if (requerimientos.NroMoneda=1,requerimientos.SubTotal2,requerimientos.SubTotal2* monedacotizaciones.CotMoneda2) AS SubTotal2,
+            if (requerimientos.NroMoneda=1,requerimientos.SubTotal2 / monedacotizaciones.CotMoneda2,requerimientos.SubTotal2) AS SubTotalUsd,
             requerimientos.SubTotal AS SubTotalBis, 
             requerimientos.SubTotal2 AS SubTotalBis2, 
             requerimientos.NroMoneda, 
@@ -1051,6 +1074,7 @@ app.get('/api/busquedaPresupuestos', authenticateToken, (req, res) => {
             presupuestos.Total AS Total2,
             if (presupuestos.NroMoneda=1,presupuestos.total,presupuestos.Total* monedacotizaciones.CotMoneda2) AS Total,
             if (presupuestos.NroMoneda=1,presupuestos.SubTotal2,presupuestos.SubTotal2* monedacotizaciones.CotMoneda2) AS SubTotal,
+             if (presupuestos.NroMoneda=2,presupuestos.SubTotal2,presupuestos.SubTotal2 / monedacotizaciones.CotMoneda2) AS SubTotalUsd,
             presupuestos.SubTotal as SubTotal2, 
             usuarios.Usuario, 
             presupuestos.NroMoneda, 
@@ -1066,6 +1090,75 @@ app.get('/api/busquedaPresupuestos', authenticateToken, (req, res) => {
          LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID=presupuestositems.IDCotizacionMoneda
         ${whereClause}
         AND presupuestos.Estado<>2 GROUP BY presupuestos.RecID ORDER BY presupuestos.FechaCreacion DESC`
+        ;
+
+    pool.query(query, values, (err, results) => {
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor' });
+        }
+        res.status(200).json(results);
+    });
+});
+app.get('/api/busquedaPresupuestosRanking', authenticateToken, (req, res) => {
+    const { empresa, fechaDesde, fechaHasta } = req.query;
+    // Construye la consulta SQL dinámicamente
+    let conditions = [];
+    let values = [];
+
+    if (fechaDesde) {
+        conditions.push("DATE(presupuestos.FechaCreacion) >= ?");
+        values.push(fechaDesde);
+    }
+    if (fechaHasta) {
+        conditions.push("DATE(presupuestos.FechaCreacion) <= ?");
+        values.push(fechaHasta);
+    }
+
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const query =
+        `SELECT
+    t.RazonSocial,
+    SUM(t.SubTotal) AS SubTotal,
+    COUNT(*) AS CantPresupuestos,
+    SUM(CASE WHEN t.Estado = 1 THEN 1 ELSE 0 END) AS CantPresupuestosConfirmados,
+    SUM(CASE WHEN t.Estado = 0 THEN 1 ELSE 0 END) AS CantPresupuestosPendientes,
+    ROUND(SUM(CASE WHEN t.Estado = 1 THEN 1 ELSE 0 END) / COUNT(*) * 100, 2) AS PorcentajeConfirmados,
+
+    -- 👉 Nuevos campos de monto real:
+    SUM(CASE WHEN t.Estado = 0 THEN t.SubTotal ELSE 0 END) AS SubTotalPendientes,
+    SUM(CASE WHEN t.Estado = 1 THEN t.SubTotal ELSE 0 END) AS SubTotalConfirmados
+
+FROM (
+    SELECT 
+        fiscal.RazonSocial,
+        presupuestos.Estado,
+        presupuestos.RecID,
+        IF (
+            presupuestos.NroMoneda = 1,
+            presupuestos.SubTotal2,
+            presupuestos.SubTotal2 * monedacotizaciones.CotMoneda2
+        ) AS SubTotal
+    FROM presupuestos
+    JOIN presupuestositems 
+        ON presupuestositems.IDPresupuesto = presupuestos.RecID
+    JOIN contactos 
+        ON contactos.IDContacto = presupuestos.IDRef
+    JOIN empresas 
+        ON empresas.IDEmpresa = contactos.IDEmpresa
+    JOIN fiscal 
+        ON fiscal.IDRef = empresas.IDEmpresa AND fiscal.Defecto = 1
+    LEFT JOIN monedacotizaciones 
+        ON monedacotizaciones.RecID = presupuestositems.IDCotizacionMoneda
+WHERE DATE(presupuestos.FechaCreacion) BETWEEN '${fechaDesde}' AND '${fechaHasta}'
+      AND presupuestos.Estado <> 2
+    GROUP BY presupuestos.RecID
+) AS t
+
+GROUP BY t.RazonSocial
+ORDER BY SubTotal DESC;
+`
         ;
 
     pool.query(query, values, (err, results) => {
@@ -1136,7 +1229,22 @@ app.get('/api/busquedaFacturas', authenticateToken, (req, res) => {
                     IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2, (facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2), 
                     IF(facturas.TipoMultitipo = 2, -((facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2), -((facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2))
                 )
-            ) AS SubTotal
+            ) AS SubTotal,
+
+                IF(
+                facturas.NroMoneda = 1,
+                IF(facturas.Tipo = 0, 
+                    IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto)/ monedacotizaciones.CotMoneda2, (facturas.SubTotal - facturas.ImporteDescuento)/ monedacotizaciones.CotMoneda2), 
+                    IF(facturas.TipoMultitipo = 2, -(facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto)/ monedacotizaciones.CotMoneda2, -(facturas.SubTotal - facturas.ImporteDescuento)/ monedacotizaciones.CotMoneda2)
+                ), 
+                
+                IF(facturas.Tipo = 0, 
+                    IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento ), (facturas.SubTotal - facturas.ImporteDescuento)), 
+                    IF(facturas.TipoMultitipo = 2, -((facturas.SubTotal - facturas.ImporteDescuento)), -((facturas.SubTotal - facturas.ImporteDescuento)))
+                )
+            ) AS SubTotalUsd
+             
+
         FROM facturas
         JOIN fiscal ON fiscal.RecID = facturas.IDFiscal
         JOIN usuarios ON usuarios.RecID = facturas.IDUsuario
@@ -1178,6 +1286,122 @@ app.get('/api/busquedaFacturas', authenticateToken, (req, res) => {
             console.error('Error al ejecutar la consulta:', err);
             return res.status(500).json({ message: 'Error interno del servidor', error: err.sqlMessage });
         }
+        console.log(results)
+        res.status(200).json(results);
+    });
+});
+app.get('/api/busquedaFacturasRanking', authenticateToken, (req, res) => {
+    const { empresa, fechaDesde, fechaHasta } = req.query;
+    let hexEmpresa = ""
+    if (empresa) {
+        // Convertir el texto a bytes y mostrar en hexadecimal
+        hexEmpresa = Buffer.from(empresa, 'utf8').toString('hex').toUpperCase();
+        console.log("EMPRESA BUSCADA:", empresa);
+        console.log("HEX:", hexEmpresa);
+    }
+
+    const conditions = [];
+    const values = [];
+
+    if (fechaDesde) {
+        conditions.push("DATE(facturas.FechaCreacion) >= ?");
+        values.push(fechaDesde);
+    }
+    if (fechaHasta) {
+        conditions.push("DATE(facturas.FechaCreacion) <= ?");
+        values.push(fechaHasta);
+    }
+
+    conditions.push("facturas.Estado IN (0, 1, 5)");
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const query = `
+SELECT 
+    A.*, 
+    B.TotalGeneralDelPeriodo,
+    
+    -- CANTIDAD TOTAL DE REGISTROS DEL PERIODO (NO AGRUPADOS)
+    (SELECT COUNT(*) 
+       FROM facturas 
+      WHERE DATE(FechaCreacion) >= '2025-11-18'
+        AND DATE(FechaCreacion) <= '2025-11-26'
+    ) AS CantidadRegistros,
+    
+    -- PORCENTAJE SOBRE EL TOTAL GENERAL
+    ROUND((A.SubTotal / B.TotalGeneralDelPeriodo) * 100, 2) AS Porcentaje
+
+FROM (
+    SELECT 
+        fiscal.RazonSocial, 
+        usuarios.Usuario, 
+        facturas.id,
+        CAST(CONCAT(LPAD(talonarios.NroSucursal,5,'0'),'-', LPAD(facturas.Numero,8,'0')) AS CHAR) AS Numero, 
+        facturas.FechaCreacion,
+        facturas.Estado, 
+        facturas.NroMoneda, 
+        COUNT(facturas.id) AS CantFacturas,
+        SUM( IF(
+            facturas.NroMoneda = 1, 
+            IF(facturas.Tipo = 0, 
+                IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), (facturas.SubTotal - facturas.ImporteDescuento)), 
+                IF(facturas.TipoMultitipo = 2, -(facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto), -(facturas.SubTotal - facturas.ImporteDescuento))
+            ), 
+            IF(facturas.Tipo = 0, 
+                IF(facturas.TipoMultitipo = 2, (facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2, (facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2), 
+                IF(facturas.TipoMultitipo = 2, -((facturas.SubTotal - facturas.ImporteDescuento - facturas.Impuesto) * monedacotizaciones.CotMoneda2), -((facturas.SubTotal - facturas.ImporteDescuento) * monedacotizaciones.CotMoneda2))
+            )
+        )) AS SubTotal
+
+    FROM facturas
+    JOIN fiscal ON fiscal.RecID = facturas.IDFiscal
+    JOIN usuarios ON usuarios.RecID = facturas.IDUsuario
+    JOIN talonarios ON talonarios.RecID = facturas.IDTalonario
+    LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = facturas.IDCotizacionMoneda
+
+    WHERE DATE(facturas.FechaCreacion) >= '${fechaDesde}'
+      AND DATE(facturas.FechaCreacion) <= '${fechaHasta}'
+
+    GROUP BY fiscal.RecID
+    ORDER BY SubTotal DESC
+) AS A,
+
+(
+    SELECT 
+        SUM(
+            IF(f.NroMoneda = 1, 
+                IF(f.Tipo = 0, 
+                    IF(f.TipoMultitipo = 2, (f.SubTotal - f.ImporteDescuento - f.Impuesto), (f.SubTotal - f.ImporteDescuento)), 
+                    IF(f.TipoMultitipo = 2, -(f.SubTotal - f.ImporteDescuento - f.Impuesto), -(f.SubTotal - f.ImporteDescuento))
+                ), 
+                IF(f.Tipo = 0, 
+                    IF(f.TipoMultitipo = 2, (f.SubTotal - f.ImporteDescuento - f.Impuesto) * m.CotMoneda2, (f.SubTotal - f.ImporteDescuento) * m.CotMoneda2), 
+                    IF(f.TipoMultitipo = 2, -((f.SubTotal - f.ImporteDescuento - f.Impuesto) * m.CotMoneda2), -((f.SubTotal - f.ImporteDescuento) * m.CotMoneda2))
+                )
+            )
+        ) AS TotalGeneralDelPeriodo
+    FROM facturas f
+    LEFT JOIN monedacotizaciones m ON m.RecID = f.IDCotizacionMoneda
+
+    WHERE f.Estado IN (0, 1, 5)
+      AND DATE(f.FechaCreacion) >= '${fechaDesde}'
+      AND DATE(f.FechaCreacion) <= '${fechaHasta}'
+) AS B;
+
+
+    `;
+
+    // Armamos de nuevo los valores para la subconsulta B también
+    const allValues = [...values];
+    if (fechaDesde) allValues.push(fechaDesde);
+    if (fechaHasta) allValues.push(fechaHasta);
+
+    pool.query(query, allValues, (err, results) => {
+        if (err) {
+            console.error('Error al ejecutar la consulta:', err);
+            return res.status(500).json({ message: 'Error interno del servidor', error: err.sqlMessage });
+        }
+        console.log(results)
         res.status(200).json(results);
     });
 });
@@ -2113,10 +2337,11 @@ FROM (
 app.get('/api/facturasmes', authenticateToken, (req, res) => {
     const idusuario = req.user.userId;
     const mes = parseInt(req.query.mes);
+    const anio = req.query.anio ? parseInt(req.query.anio) : new Date().getFullYear(); // 👈 NUEVO
     const modulo1 = 1;
     const modulo2 = 2;
     const modulo4 = 4;
-    console.log(idusuario)
+    console.log('idusuario:', idusuario, 'mes:', mes, 'anio:', anio);
 
     const facturasQuery = `
         SELECT
@@ -2135,13 +2360,15 @@ app.get('/api/facturasmes', authenticateToken, (req, res) => {
                     )) 
                 FROM facturas
                 LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = facturas.IDCotizacionMoneda
-                WHERE facturas.Estado IN (0, 1, 5) AND MONTH(facturas.FechaCreacion) = ? AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE())
+                WHERE facturas.Estado IN (0, 1, 5)
+                  AND MONTH(facturas.FechaCreacion) = ?
+                  AND YEAR(facturas.FechaCreacion) = ?
             ) AS suma_facturas,
             (
                 SELECT COUNT(*) 
                 FROM facturas
                 WHERE MONTH(facturas.FechaCreacion) = ?
-                  AND YEAR(facturas.FechaCreacion) = YEAR(CURDATE()) 
+                  AND YEAR(facturas.FechaCreacion) = ?
                   AND facturas.Estado IN (0, 1, 5)
             ) AS cantidad_facturas,
             (
@@ -2161,7 +2388,8 @@ app.get('/api/facturasmes', authenticateToken, (req, res) => {
                 WHERE idusuario = ? AND modulo = ? AND mes = ?
             ) AS objetivo_pedidos
         FROM resumen_pedidos 
-        WHERE MONTH(creado_en) = ? AND YEAR(creado_en) = YEAR(CURDATE())
+        WHERE MONTH(creado_en) = ?
+          AND YEAR(creado_en) = ?
     `;
 
     const presupuestosQuery = `
@@ -2176,72 +2404,74 @@ app.get('/api/facturasmes', authenticateToken, (req, res) => {
         JOIN usuarios ON usuarios.recid = presupuestos.IDUsuarioCreacion
         LEFT JOIN monedacotizaciones ON monedacotizaciones.RecID = presupuestositems.IDCotizacionMoneda
         WHERE MONTH(presupuestos.FechaCreacion) = ? 
-          AND YEAR(presupuestos.FechaCreacion) = YEAR(CURDATE())
+          AND YEAR(presupuestos.FechaCreacion) = ?
           AND presupuestos.Estado <> 2
         GROUP BY presupuestos.RecID
         ORDER BY presupuestos.FechaCreacion DESC
     `;
 
     const requerimientosQuery = `
-         SELECT 
-    SUM(subtotal_ajustado) AS subtotal, 
-    (
-        SELECT valor 
-        FROM objetivomensual 
-        WHERE modulo = ? AND idusuario = ? AND mes = ?
-        LIMIT 1
-    ) AS objetivo
-FROM (
-    SELECT DISTINCT 
-        CASE 
-            WHEN requerimientos.nromoneda = 1 THEN requerimientos.SubTotal2
-            WHEN requerimientos.nromoneda = 2 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda2
-            WHEN requerimientos.nromoneda = 3 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda3
-            ELSE 0  
-        END AS subtotal_ajustado
-    FROM requerimientos 
-    JOIN requerimientositems ON requerimientositems.IDRequerimiento = requerimientos.recid
-    JOIN fiscal ON fiscal.recid = requerimientos.IDFiscal
-    JOIN monedacotizaciones ON monedacotizaciones.RecID = requerimientositems.IDCotizacionMoneda
-    WHERE
-       MONTH(requerimientos.FechaCreacion) = ?
-      AND YEAR(requerimientos.FechaCreacion) = YEAR(CURDATE()) AND requerimientos.estado<>2
-) AS subquery;
+        SELECT 
+            SUM(subtotal_ajustado) AS subtotal, 
+            (
+                SELECT valor 
+                FROM objetivomensual 
+                WHERE modulo = ? AND idusuario = ? AND mes = ?
+                LIMIT 1
+            ) AS objetivo
+        FROM (
+            SELECT DISTINCT 
+                CASE 
+                    WHEN requerimientos.nromoneda = 1 THEN requerimientos.SubTotal2
+                    WHEN requerimientos.nromoneda = 2 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda2
+                    WHEN requerimientos.nromoneda = 3 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda3
+                    ELSE 0  
+                END AS subtotal_ajustado
+            FROM requerimientos 
+            JOIN requerimientositems ON requerimientositems.IDRequerimiento = requerimientos.recid
+            JOIN fiscal ON fiscal.recid = requerimientos.IDFiscal
+            JOIN monedacotizaciones ON monedacotizaciones.RecID = requerimientositems.IDCotizacionMoneda
+            WHERE
+                MONTH(requerimientos.FechaCreacion) = ?
+              AND YEAR(requerimientos.FechaCreacion) = ?
+              AND requerimientos.estado<>2
+        ) AS subquery;
     `;
 
     const requerimientosMicroQuery = `
-    SELECT 
-    SUM(subtotal_ajustado) AS subtotal, 
-    (
-        SELECT valor 
-        FROM objetivomensual 
-        WHERE modulo = ? AND idusuario = ? AND mes = ?
-        LIMIT 1
-    ) AS objetivo
-FROM (
-    SELECT DISTINCT 
-        CASE 
-            WHEN requerimientos.nromoneda = 1 THEN requerimientos.SubTotal2
-            WHEN requerimientos.nromoneda = 2 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda2
-            WHEN requerimientos.nromoneda = 3 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda3
-            ELSE 0  
-        END AS subtotal_ajustado
-    FROM requerimientos 
-    JOIN requerimientositems ON requerimientositems.IDRequerimiento = requerimientos.recid
-    JOIN fiscal ON fiscal.recid = requerimientos.IDFiscal
-    JOIN monedacotizaciones ON monedacotizaciones.RecID = requerimientositems.IDCotizacionMoneda
-    WHERE fiscal.RazonSocial = 'AUTOMAC.MICROMECANICA S.A.I.C.' AND requerimientos.estado<>2
-      AND MONTH(requerimientos.FechaCreacion) = ?
-      AND YEAR(requerimientos.FechaCreacion) = YEAR(CURDATE())
-) AS subquery;
-`;
+        SELECT 
+            SUM(subtotal_ajustado) AS subtotal, 
+            (
+                SELECT valor 
+                FROM objetivomensual 
+                WHERE modulo = ? AND idusuario = ? AND mes = ?
+                LIMIT 1
+            ) AS objetivo
+        FROM (
+            SELECT DISTINCT 
+                CASE 
+                    WHEN requerimientos.nromoneda = 1 THEN requerimientos.SubTotal2
+                    WHEN requerimientos.nromoneda = 2 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda2
+                    WHEN requerimientos.nromoneda = 3 THEN requerimientos.SubTotal2 * monedacotizaciones.CotMoneda3
+                    ELSE 0  
+                END AS subtotal_ajustado
+            FROM requerimientos 
+            JOIN requerimientositems ON requerimientositems.IDRequerimiento = requerimientos.recid
+            JOIN fiscal ON fiscal.recid = requerimientos.IDFiscal
+            JOIN monedacotizaciones ON monedacotizaciones.RecID = requerimientositems.IDCotizacionMoneda
+            WHERE fiscal.RazonSocial = 'AUTOMAC.MICROMECANICA S.A.I.C.' 
+              AND requerimientos.estado<>2
+              AND MONTH(requerimientos.FechaCreacion) = ?
+              AND YEAR(requerimientos.FechaCreacion) = ?
+        ) AS subquery;
+    `;
 
-    const facturasParams = [mes, mes, idusuario, modulo1, mes];
-    const pedidosParams = [idusuario, modulo2, mes, mes];
-    const presupuestosParams = [mes];
-    const requerimientosParams = [modulo4, idusuario, mes, mes];
-    const requerimientosMicroParams = [modulo4, idusuario, mes, mes];
-
+    // 👇 Parámetros actualizados con "anio"
+    const facturasParams = [mes, anio, mes, anio, idusuario, modulo1, mes];
+    const pedidosParams = [idusuario, modulo2, mes, mes, anio];
+    const presupuestosParams = [mes, anio];
+    const requerimientosParams = [modulo4, idusuario, mes, mes, anio];
+    const requerimientosMicroParams = [modulo4, idusuario, mes, mes, anio];
 
     const facturasPromise = new Promise((resolve, reject) => {
         pool.query(facturasQuery, facturasParams, (err, results) => {
@@ -2270,6 +2500,7 @@ FROM (
             resolve(results[0]);
         });
     });
+
     const requerimientosMicroPromise = new Promise((resolve, reject) => {
         pool.query(requerimientosMicroQuery, requerimientosMicroParams, (err, results) => {
             if (err) return reject(err);
@@ -2279,7 +2510,6 @@ FROM (
 
     Promise.all([facturasPromise, pedidosPromise, presupuestosPromise, requerimientosPromise, requerimientosMicroPromise])
         .then(([facturas, pedidos, presupuestos, requerimientos, requerimientosMicro]) => {
-
             res.status(200).json({
                 facturas,
                 pedidos,
@@ -3044,6 +3274,263 @@ const enviarStockPorCorreo = async (data, fabricante, monedaBusqueda) => {
     }
 };
 
+const generarExcel = async (data) => {
+    try {
+        if (!Array.isArray(data) || data.length === 0) {
+            throw new Error('No hay datos para exportar');
+        }
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Reporte');
+
+        worksheet.columns = [
+            { header: 'Razón Social', key: 'RazonSocial', width: 40 },
+            { header: 'Cant. Facturas', key: 'CantFacturas', width: 15 },
+            { header: 'Porcentaje %', key: 'Porcentaje', width: 12 },
+            { header: 'SubTotal', key: 'SubTotal', width: 15 }
+        ];
+
+        // Negrita en headers
+        worksheet.getRow(1).eachCell(cell => {
+            cell.font = { bold: true };
+            cell.alignment = { horizontal: 'center' };
+        });
+
+        let totalSub = 0;
+        let totalFact = 0;
+
+        data.forEach(item => {
+            worksheet.addRow({
+                RazonSocial: item.RazonSocial,
+                CantFacturas: item.CantFacturas,
+                Porcentaje: item.Porcentaje,
+                SubTotal: item.SubTotal
+            });
+            totalSub += Number(item.SubTotal || 0);
+            totalFact += Number(item.CantFacturas || 0);
+        });
+
+        const rowCount = worksheet.rowCount;
+
+        // Formato moneda en SubTotal (col D)
+        for (let i = 2; i <= rowCount; i++) {
+            worksheet.getCell(`D${i}`).numFmt = '"$"#,##0.00';
+        }
+
+        // Formato porcentaje en col C
+        for (let i = 2; i <= rowCount; i++) {
+            worksheet.getCell(`C${i}`).numFmt = '0.00" %"';
+        }
+
+        // Totales
+        const totalRow = worksheet.addRow({
+            RazonSocial: 'TOTAL:',
+            CantFacturas: totalFact,
+            Porcentaje: '',
+            SubTotal: totalSub
+        });
+
+        totalRow.getCell('A').font = { bold: true };
+        totalRow.getCell('B').font = { bold: true };
+        totalRow.getCell('D').font = { bold: true };
+        totalRow.getCell('D').numFmt = '"$"#,##0.00';
+
+        const excelPath = path.join(__dirname, 'reporte_clientes.xlsx');
+        await workbook.xlsx.writeFile(excelPath);
+
+        // Enviar por correo
+        const transporter = nodemailer.createTransport({
+            host: 'vxct8007.avnam.net',
+            port: 587,
+            secure: false,
+            auth: {
+                user: 'noreply@distritec.com.ar',
+                pass: 'RT58i.j@2T49!',
+            },
+            tls: { rejectUnauthorized: false }
+        });
+
+        const hoy = new Date().toISOString().split('T')[0];
+        const nombreArchivo = `Reporte_Clientes_${hoy}.xlsx`;
+
+        await transporter.sendMail({
+            from: '"Sistema Reporte" <noreply@distritec.com.ar>',
+            to: 'jrivas@distritec.com.ar',
+            subject: 'Reporte Clientes / Facturación',
+            text: 'Adjunto encontrarás el reporte solicitado',
+            attachments: [{ filename: nombreArchivo, path: excelPath }]
+        });
+
+        fs.unlinkSync(excelPath);
+    } catch (err) {
+        console.error(err);
+        throw err;
+    }
+};
+
+app.post('/api/generarExcel', async (req, res) => {
+
+    try {
+        const { data } = req.body;
+
+        await generarExcel(data);
+        res.status(200).json({ message: 'Correo enviado correctamente' });
+
+    } catch (error) {
+        console.error('Error en endpoint:', error);
+        res.status(500).json({ error: 'Error al enviar el correo' });
+    }
+});
+
+const generarExcelPresupuestos = async (data) => {
+  try {
+    if (!Array.isArray(data) || data.length === 0) {
+      throw new Error('No hay datos para exportar');
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Presupuestos');
+
+    // ---------------------------
+    // 1) Definir columnas
+    // ---------------------------
+    worksheet.columns = [
+      { header: 'Razón Social',             key: 'RazonSocial',               width: 40 },
+      { header: 'Cant. Presupuestos',       key: 'CantPresupuestos',          width: 18 },
+      { header: 'Confirmados',              key: 'CantPresupuestosConfirmados', width: 15 },
+      { header: 'Pendientes',               key: 'CantPresupuestosPendientes',  width: 15 },
+      { header: '% Confirmados',            key: 'PorcentajeConfirmados',     width: 15 },
+      { header: 'SubTotal Total',           key: 'SubTotal',                  width: 18 },
+    ];
+
+    // Headers en negrita y centrados
+    worksheet.getRow(1).eachCell((cell) => {
+      cell.font = { bold: true };
+      cell.alignment = { horizontal: 'center' };
+    });
+
+    // ---------------------------
+    // 2) Agregar filas + acumular totales
+    // ---------------------------
+    let totalSub      = 0;
+    let totalCant     = 0;
+    let totalCantConf = 0;
+    let totalCantPend = 0;
+
+    data.forEach((item) => {
+
+      const CantPresupuestos            = Number(item.CCantPresupuestos || item.CantPresupuestos || 0);
+      const CantPresupuestosConfirmados = Number(item.CantPresupuestosConfirmados || 0);
+      const CantPresupuestosPendientes  = Number(item.CantPresupuestosPendientes || 0);
+      const PorcentajeConfirmados       = Number(item.PorcentajeConfirmados || 0);
+      const SubTotal                    = Number(item.SubTotal || 0);
+
+      worksheet.addRow({
+        RazonSocial: item.RazonSocial,
+        CantPresupuestos,
+        CantPresupuestosConfirmados,
+        CantPresupuestosPendientes,
+        PorcentajeConfirmados,
+        SubTotal
+      });
+
+      totalSub      += SubTotal;
+      totalCant     += CantPresupuestos;
+      totalCantConf += CantPresupuestosConfirmados;
+      totalCantPend += CantPresupuestosPendientes;
+    });
+
+    // ---------------------------
+    // 3) Fila de totales
+    // ---------------------------
+    const porcentajeGlobalConfirmados =
+      totalCant > 0 ? (totalCantConf * 100) / totalCant : 0;
+
+    const totalRow = worksheet.addRow({
+      RazonSocial: 'TOTAL:',
+      CantPresupuestos: totalCant,
+      CantPresupuestosConfirmados: totalCantConf,
+      CantPresupuestosPendientes: totalCantPend,
+      PorcentajeConfirmados: porcentajeGlobalConfirmados,
+      SubTotal: totalSub,
+    });
+
+    totalRow.eachCell((cell) => {
+      cell.font = { bold: true };
+    });
+
+    // ---------------------------
+    // 4) Formatos numéricos
+    // ---------------------------
+    const lastRow = worksheet.rowCount;
+
+    // Columna de moneda: F
+    for (let i = 2; i <= lastRow; i++) {
+      worksheet.getCell(`F${i}`).numFmt = '"$"#,##0.00';
+    }
+
+    // Columna porcentaje: E
+    for (let i = 2; i <= lastRow; i++) {
+      worksheet.getCell(`E${i}`).numFmt = '0.00" %"';
+      worksheet.getCell(`E${i}`).alignment = { horizontal: 'center' };
+    }
+
+    // ---------------------------
+    // 5) Guardar Excel temporal
+    // ---------------------------
+    const excelPath = path.join(__dirname, 'reporte_presupuestos.xlsx');
+    await workbook.xlsx.writeFile(excelPath);
+
+    // ---------------------------
+    // 6) Enviar por correo
+    // ---------------------------
+    const transporter = nodemailer.createTransport({
+      host: 'vxct8007.avnam.net',
+      port: 587,
+      secure: false,
+      auth: {
+        user: 'noreply@distritec.com.ar',
+        pass: 'RT58i.j@2T49!',
+      },
+      tls: { rejectUnauthorized: false },
+    });
+
+    const hoy = new Date().toISOString().split('T')[0];
+    const nombreArchivo = `Reporte_Presupuestos_${hoy}.xlsx`;
+
+    await transporter.sendMail({
+      from: '"Sistema Reporte" <noreply@distritec.com.ar>',
+      to: 'jrivas@distritec.com.ar',
+      subject: 'Reporte Clientes / Presupuestos',
+      text: 'Adjunto encontrarás el reporte de presupuestos solicitado.',
+      attachments: [{ filename: nombreArchivo, path: excelPath }],
+    });
+
+    // Borrar archivo temporal
+    fs.unlinkSync(excelPath);
+  } catch (err) {
+    console.error(err);
+    throw err;
+  }
+};
+
+
+
+
+app.post('/api/generarExcelPresupuestos', async (req, res) => {
+
+    try {
+        const { data } = req.body;
+     
+        await generarExcelPresupuestos(data);
+        res.status(200).json({ message: 'Correo enviado correctamente' });
+
+    } catch (error) {
+        console.error('Error en endpoint:', error);
+        res.status(500).json({ error: 'Error al enviar el correo' });
+    }
+});
+
 app.post('/api/enviarstock', async (req, res) => {
 
     try {
@@ -3365,6 +3852,71 @@ async function checkAndNotifyForAllUsers() {
         });
     });
 }
+
+
+// APP WEB SEGUIMIENTO CLIENTES
+app.get('/api/pedido/:recid', async (req, res) => {
+  const recidHex = req.params.recid
+
+  console.log(req.params.recid)
+
+  if (!recidHex || !/^[0-9a-fA-F]+$/.test(recidHex)) {
+    return res.status(400).json({ error: 'RecID inválido' })
+  }
+
+  const sql = `
+    SELECT
+      HEX(pedidos.RecID)    AS RecID,
+      pedidos.Numero,
+      pedidos.FechaCreacion,
+      pedidos.Estado        AS estado_pedido,
+      pedidos.Escenario     AS escenario_pedido,
+      fiscal.RazonSocial,
+      pedidositems.NroFila,
+      pedidositems.Codigo,
+      pedidositems.Descripcion,
+      pedidositems.Cantidad,
+      pedidositems.Escenario AS separado,
+      pedidositems.Estado    AS estado_itempedido
+    FROM pedidos
+    JOIN pedidositems ON pedidositems.IDPedido = pedidos.RecID
+    JOIN fiscal       ON fiscal.RecID = pedidos.IDFiscal
+    WHERE pedidos.RecID = UNHEX('${recidHex}')
+    ORDER BY pedidositems.NroFila ASC
+  `
+
+  try {
+    const [rows] = await pool.promise().query(sql)
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Pedido no encontrado' })
+    }
+
+    const first = rows[0]
+    const response = {
+      RecID:            first.RecID,
+      Numero:           first.Numero,
+      FechaCreacion:    first.FechaCreacion,
+      estado_pedido:    first.estado_pedido,
+      escenario_pedido: first.escenario_pedido,
+      RazonSocial:      first.RazonSocial,
+      items: rows.map(r => ({
+        NroFila:           r.NroFila,
+        Codigo:            r.Codigo,
+        Descripcion:       r.Descripcion,
+        Cantidad:          r.Cantidad,
+        separado:          r.separado,
+        estado_itempedido: r.estado_itempedido,
+      }))
+    }
+
+    res.json(response)
+  } catch (err) {
+    console.error('DB error:', err)
+    res.status(500).json({ error: 'Error interno del servidor' })
+  }
+})
+
 
 
 // Restablecer el campo notificacion_enviada todos los días a la medianoche
