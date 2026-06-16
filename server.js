@@ -14,8 +14,8 @@ const path = require('path');
 
 // Configuración de la base de datos MySQL
 const pool = mysql.createPool({
-    host: '152.170.159.119',
-    user: 'root',  // Cambia a tu usuario
+    host: '192.168.52.240',
+    user: 'crisoft',  // Cambia a tu usuario
     password: 'Distri*2019*Tec',  // Cambia a tu contraseña
     database: 'distritec',  // Cambia a tu base de datos
     port: 2064,
